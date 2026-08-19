@@ -1,0 +1,57 @@
+# Invariant: these hooks run the EXACT commands CI runs. See .github/workflows/ci.yml.
+# Tool versions come from uv.lock via `uv run` rather than from pre-commit's own
+# pinned mirrors — two independent pins is how a hook starts passing locally while
+# CI fails on the same code.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check
+        language: system
+        types_or: [python, pyi]
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy
+        entry: uv run mypy src evals tests
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+      - id: pytest
+        name: pytest (fast subset — no DB, no billable API calls)
+        entry: uv run pytest
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+
+      - id: readme-metrics-fresh
+        name: README metric tables match metrics/history.jsonl
+        entry: uv run python -m evals.render_readme --check
+        language: system
+        files: ^(README\.md|metrics/history\.jsonl|evals/render_readme\.py)$
+        pass_filenames: false

@@ -1,0 +1,88 @@
+name: ci
+
+# Free and fast. Everything billable (Claude API) or stateful (Postgres) lives
+# in separate workflows so this one can gate every push without a cost ceiling.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  UV_FROZEN: "1" # fail if uv.lock is stale rather than silently re-resolving
+
+jobs:
+  quality:
+    name: lint · types · tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # These four mirror .pre-commit-config.yaml exactly. If you change one,
+      # change both — a hook that disagrees with CI is a hook that lies.
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: mypy
+        run: uv run mypy src evals tests
+
+      - name: pytest
+        run: uv run pytest
+
+      # The README metric tables are generated, never hand-typed. This catches a
+      # table that drifted away from the recorded evidence.
+      - name: README metric tables are current
+        run: uv run python -m evals.render_readme --check
+
+      # Passes trivially while no eval has run; becomes a real gate the moment
+      # metrics/history.jsonl has two rows for a layer.
+      - name: Metrics regression gate
+        run: |
+          uv run python -m evals.gate --layer retrieval
+          uv run python -m evals.gate --layer audit
+
+  container:
+    name: docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only — publishing happens in release.yml on a tag. Building on
+      # every PR is what stops the Dockerfile rotting unnoticed between releases.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: kontrakt-guard:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

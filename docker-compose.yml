@@ -1,0 +1,49 @@
+# One command to a working stack: `docker compose up`.
+# Postgres carries BOTH legs of hybrid retrieval — pgvector for the dense leg,
+# Polish full-text search for the BM25 leg — which is why there is no separate
+# vector-database service here.
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kontrakt_guard}
+      POSTGRES_USER: ${POSTGRES_USER:-kontrakt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kontrakt}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # The API must not start against a database that is still initialising.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kontrakt} -d ${POSTGRES_DB:-kontrakt_guard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-kontrakt_guard}
+      POSTGRES_USER: ${POSTGRES_USER:-kontrakt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kontrakt}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_REVISION: ${EMBEDDING_REVISION:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the embedding model between runs; re-downloading ~2 GB on every
+      # `compose up` makes the quickstart look broken.
+      - hfcache:/app/.cache/huggingface
+
+volumes:
+  pgdata:
+  hfcache:

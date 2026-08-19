@@ -46,6 +46,17 @@ dev = [
     "types-beautifulsoup4",
 ]
 
+# The brief specifies no GPUs. Default PyPI torch on Windows/Linux bundles CUDA
+# and costs ~2 GB; the CPU-only build is a fraction of that and cuts CI install
+# time substantially. Pinned explicitly so nothing silently pulls the CUDA wheel.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -68,6 +79,11 @@ ignore = ["ANN401"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN"]
 
+# `evals` is a repo-root package, not an installed dependency; without this
+# ruff sorts it into the third-party block.
+[tool.ruff.lint.isort]
+known-first-party = ["kontrakt_guard", "evals"]
+
 # ---------------------------------------------------------------------------
 # Types
 # ---------------------------------------------------------------------------
@@ -81,12 +97,23 @@ plugins = ["pydantic.mypy"]
 module = ["sentence_transformers.*", "pgvector.*", "langgraph.*"]
 ignore_missing_imports = true
 
+# Tests are still type-checked; they just do not need a signature annotation on
+# every case. Mirrors the ruff ANN exemption above so the two agree.
+[[tool.mypy.overrides]]
+module = ["tests.*", "conftest"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
 # ---------------------------------------------------------------------------
 # Tests. Integration tests need a live pgvector instance; evals cost API money.
 # Both are opt-in so the default `pytest` run stays free and fast.
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `evals` lives at the repo root and is intentionally not shipped in the wheel;
+# it is tooling, not library surface. Put the root on the path so tests see it.
+pythonpath = ["."]
 addopts = "-q --strict-markers -m 'not integration and not llm'"
 asyncio_mode = "auto"
 markers = [

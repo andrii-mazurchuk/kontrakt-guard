@@ -45,7 +45,12 @@ _No eval runs recorded yet._
 <!-- METRICS:LAYER2:END -->
 
 The two layers are evaluated independently on purpose: when a number moves, it is attributable to
-retrieval or to judgement, not to an undifferentiated blob.
+retrieval or to judgement, not to an undifferentiated blob. CI fails a pull request that regresses
+either metric past tolerance, so these numbers are defended rather than merely reported.
+
+**Read [`LIMITATIONS.md`](LIMITATIONS.md) alongside them.** The audit dataset is synthetic, the gold
+set is small and single-annotator, and the corpus excludes case law — all of which bounds what these
+scores can be taken to mean.
 
 ---
 
@@ -67,8 +72,15 @@ clauses.
 
 ## Development
 
-See [`CLAUDE.md`](CLAUDE.md) for the binding technical decisions and
-[`docs/adr/`](docs/adr/) for why they were made.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, the exact commands CI runs, branch and commit
+conventions, and the rules around evals. [`docs/adr/`](docs/adr/) records why the load-bearing
+decisions were made — pgvector over a hosted vector database, article-aware chunking, hybrid
+retrieval without a reranker, and metrics in a committed file rather than an experiment tracker.
+
+```bash
+uv sync && uv run pre-commit install
+uv run pytest
+```
 
 ---
 
