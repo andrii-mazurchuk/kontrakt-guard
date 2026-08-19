@@ -15,9 +15,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  UV_FROZEN: "1" # fail if uv.lock is stale rather than silently re-resolving
-
 jobs:
   quality:
     name: lint · types · tests

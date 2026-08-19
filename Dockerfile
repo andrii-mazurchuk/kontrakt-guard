@@ -7,9 +7,11 @@ FROM python:3.13-slim-bookworm AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.10 /uv /usr/local/bin/uv
 
+# Not UV_FROZEN: it is mutually exclusive with the `--locked` flag used below,
+# and `--locked` is the stronger assertion — it fails on a stale lockfile
+# instead of quietly building against it.
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    UV_FROZEN=1 \
     UV_PYTHON_DOWNLOADS=never
 
 WORKDIR /app
