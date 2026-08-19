@@ -1,0 +1,11 @@
+# Normalise to LF in the repo. CI runs on Linux; CRLF leaking into shell scripts
+# or fixture files causes failures that reproduce only on the runner.
+* text=auto eol=lf
+
+# Eval data is line-oriented and must diff cleanly — it is the scientific artifact.
+*.jsonl text eol=lf
+metrics/history.jsonl text eol=lf
+
+*.png binary
+*.pdf binary
+*.docx binary

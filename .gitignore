@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+.env.local
+
+# Fetched corpus — reproduced from ingestion/corpus_manifest.json, never committed.
+# The manifest carries SHA-256 checksums so the corpus is pinned without storing it.
+data/corpus/
+data/raw/
+
+# Model weights / embedding caches
+.cache/
+models/
+*.safetensors
+*.bin
+
+# Generated dashboard output (built by CI from metrics/history.jsonl)
+site/
+
+# Private working context — kept local, deliberately not published.
+# The brief carries career/CV strategy that does not belong in a public repo's
+# permanent history. Engineering decisions that DO belong live in docs/adr/.
+kontrakt_guard_project_brief.md
+job_market_report_*.md
+.claude/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
