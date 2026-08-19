@@ -41,6 +41,33 @@ def test_small_dip_within_tolerance_passes(retrieval_row):
     assert passed
 
 
+def test_drop_of_exactly_tolerance_is_allowed(retrieval_row):
+    """0.88 -> 0.85 is a fall of exactly TOLERANCE and must pass.
+
+    Binary floating point renders that subtraction as -0.030000000000000027, so a
+    naive `delta < -TOLERANCE` fails a run that is precisely at the limit — the
+    verdict would hinge on representation error rather than on the measurement.
+    """
+    before = _with_recall(retrieval_row, k10=0.88)
+    after = _with_recall(retrieval_row, k10=0.85)
+
+    # Guards the guard: if this ever stops holding, the test above is vacuous.
+    naive_delta = 0.85 - 0.88
+    assert naive_delta < -gate.TOLERANCE, "the float artifact this defends against is real"
+
+    passed, lines = gate.check("retrieval", history=[before, after])
+    assert passed
+    assert "REGRESSION" not in " ".join(lines)
+
+
+def test_drop_just_beyond_tolerance_still_fails(retrieval_row):
+    """The epsilon must not be wide enough to swallow a genuine regression."""
+    before = _with_recall(retrieval_row, k10=0.88)
+    after = _with_recall(retrieval_row, k10=0.8499)
+    passed, _ = gate.check("retrieval", history=[before, after])
+    assert not passed
+
+
 def test_gate_ignores_the_other_layer(retrieval_row, audit_row):
     worse = _with_recall(retrieval_row, k5=0.10)
     passed, _ = gate.check("audit", history=[retrieval_row, worse, audit_row])
