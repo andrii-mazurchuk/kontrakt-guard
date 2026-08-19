@@ -40,7 +40,30 @@ Both metrics tables go in the README — the single highest-value artifact of th
 
 ## Commands
 
-Target state (per brief §9): `docker compose up` brings up postgres+pgvector and the API. As build/test/eval commands are established during the build, record them here.
+```bash
+uv sync                                        # venv on Python 3.13 from uv.lock
+uv run pre-commit install
+uv run pytest                                  # default run excludes integration + llm markers
+uv run pytest -m integration                   # needs: docker compose up db
+uv run pytest -m llm                           # billable
+uv run pytest tests/test_gate.py::test_name    # single test
+uv run ruff format --check . && uv run ruff check . && uv run mypy src evals tests
+uv run python -m evals.render_readme --check   # README tables match recorded evidence
+uv run python -m evals.gate --layer retrieval  # regression gate
+docker compose up                              # postgres+pgvector + API
+```
+
+`.pre-commit-config.yaml` and `.github/workflows/ci.yml` run these identically on purpose. **If you change one, change both** — a hook that disagrees with CI is a hook that lies.
+
+Use `git commit -F <file>` for multi-line messages on this machine; PowerShell mangles here-strings containing double quotes when passing them to native commands.
+
+## Repository state
+
+Workflow foundation is complete and verified: CI green, `main` protected with admin enforcement on, squash-merge only. `CONTRIBUTING.md` documents the branch strategy and the protection escape hatch; `docs/adr/` records the load-bearing decisions; `LIMITATIONS.md` was written before any numbers exist so the caveats stay honest.
+
+Not yet built — this is the actual project, and its design is Andrey's call, not something to assume: ingestion, retrieval, the LangGraph flows, the gold set, and the contract generator. The API carries only `/health` and `/`.
+
+**Installed LangGraph is 1.2.11 and langchain-core 1.5.6 — the v1 APIs.** Nearly every tutorial and blog post online targets 0.x and its idioms differ. Check the installed version's actual API rather than pattern-matching from memory or from search results.
 
 ## Conventions
 
