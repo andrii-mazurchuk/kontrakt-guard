@@ -25,6 +25,18 @@ from evals.schema import AuditMetrics, MetricsRow, RetrievalMetrics, load_histor
 # LLM non-determinism; a 3-point drop is a real regression worth blocking on.
 TOLERANCE = 0.03
 
+# Binary floating point cannot represent these decimals exactly, so a drop of
+# precisely TOLERANCE lands a hair beyond it: 0.85 - 0.88 == -0.030000000000000027.
+# Without this slack a run sitting exactly at the limit fails, which makes the
+# gate's verdict depend on representation error rather than on the measurement.
+EPSILON = 1e-9
+
+
+def _is_regression(delta: float) -> bool:
+    """A fall of exactly TOLERANCE is allowed; anything beyond it is not."""
+    return delta < -TOLERANCE - EPSILON
+
+
 # Absolute floors. Left at None until the first honest numbers exist — a floor
 # invented before any measurement is a number pulled out of the air, and the
 # brief is explicit that the metrics must be honest.
@@ -75,9 +87,10 @@ def check(
                 lines.append(f"  {name}: {value:.4f} (new)")
                 continue
             delta = value - prev
-            mark = "OK" if delta >= -TOLERANCE else "REGRESSION"
+            regressed = _is_regression(delta)
+            mark = "REGRESSION" if regressed else "OK"
             lines.append(f"  {name}: {prev:.4f} -> {value:.4f} ({delta:+.4f}) {mark}")
-            if delta < -TOLERANCE:
+            if regressed:
                 failures.append(f"{name} fell {abs(delta):.4f} (tolerance {TOLERANCE})")
 
     for name, floor in FLOORS.items():
