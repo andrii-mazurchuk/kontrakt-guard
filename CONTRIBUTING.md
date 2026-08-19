@@ -58,7 +58,28 @@ git push -u origin feat/hybrid-retrieval
 gh pr create --fill
 ```
 
-Merge by **squash** only, so `main` reads as one commit per unit of work.
+Merge by **squash** only — the platform enforces it; merge and rebase commits are disabled, and
+the branch is deleted automatically on merge.
+
+### What protection actually enforces
+
+`main` requires a pull request, both CI checks passing, the branch up to date with `main`, and
+linear history. Force-pushes and deletions are refused.
+
+**Administrator enforcement is on.** This is deliberate: with it off, GitHub lets a repository
+admin push straight to `main` and merely notes "bypassed rule violations" afterwards, which makes
+the whole arrangement advisory. Discipline you bypass by habit is not discipline.
+
+The consequence is that a broken CI configuration can lock the repository — you cannot push the
+fix directly. The escape hatch is deliberate rather than habitual:
+
+```bash
+gh api -X DELETE repos/andrii-mazurchuk/kontrakt-guard/branches/main/protection/enforce_admins
+# push the fix
+gh api -X POST   repos/andrii-mazurchuk/kontrakt-guard/branches/main/protection/enforce_admins
+```
+
+Re-enable it in the same sitting. An escape hatch left open is just an open door.
 
 ## Commits
 
