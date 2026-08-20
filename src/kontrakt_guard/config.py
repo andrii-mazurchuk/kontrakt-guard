@@ -33,7 +33,10 @@ class Settings(BaseSettings):
 
     # --- Postgres + pgvector ------------------------------------------------
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    # 55432, not 5432: docker-compose publishes the database on a non-standard
+    # host port so it cannot collide with a locally installed PostgreSQL. Inside
+    # the compose network the api service overrides this to the container's 5432.
+    postgres_port: int = 55432
     postgres_db: str = "kontrakt_guard"
     postgres_user: str = "kontrakt"
     postgres_password: SecretStr = SecretStr("")
