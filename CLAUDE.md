@@ -57,6 +57,19 @@ docker compose up                              # postgres+pgvector + API
 
 Use `git commit -F <file>` for multi-line messages on this machine; PowerShell mangles here-strings containing double quotes when passing them to native commands.
 
+## Working agreement (overrides the global planning rules for this repo)
+
+Agreed 2026-08-20. The global `CLAUDE.md` requires a written plan and explicit sign-off before any multi-file task and between phases. **That is suspended here**, deliberately, because approving a plan one does not yet understand teaches nothing and merely slows the build.
+
+Instead: **ship in milestones, teach in the pull request.** One PR per working capability, each ending in something runnable and, wherever possible, a number. Merge when CI is green without waiting. The PR body carries the reasoning — what was built, what was rejected, what the metric says — because that is the record Andrey reads to learn the system.
+
+The line for when to stop is **empirical vs. not**. This repo has an eval harness, so most architecture questions are settled by recall@k rather than by taste:
+
+- **A number can decide it** (chunk size, `§` splitting, hybrid alpha, `k`, reranking) → measure, report, proceed. Asking for approval here would be asking someone to guess ahead of the measurement.
+- **No number can decide it** → stop and ask. Specifically: **the gold set content** and **the violation catalogue** (these define what "correct" means, so an error there makes every downstream number confidently wrong), **cost** before any large billable eval run, **scope changes**, and anything **irreversible**.
+
+A study guide with interview-shaped questions is owed at the end of the build, mapping RAG/LangGraph concepts to where they live in this code. The metrics are destined for a CV, so being unable to defend them in an interview would make the project a liability rather than an asset — that artifact is the mitigation, not an optional extra.
+
 ## Repository state
 
 Workflow foundation is complete and verified: CI green, `main` protected with admin enforcement on, squash-merge only. `CONTRIBUTING.md` documents the branch strategy and the protection escape hatch; `docs/adr/` records the load-bearing decisions; `LIMITATIONS.md` was written before any numbers exist so the caveats stay honest.
