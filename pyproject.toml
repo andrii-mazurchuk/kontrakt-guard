@@ -31,6 +31,13 @@ dependencies = [
     "httpx>=0.28",
     "lxml>=5.3",
     "beautifulsoup4>=4.12",
+    # Corpus ingestion needs character-level font metrics: Polish statutes number
+    # inserted articles with superscripts (Art. 23² alongside a real Art. 232), and
+    # a plain text extractor flattens them into the same string. pdfplumber exposes
+    # glyph size and baseline offset, which separates them deterministically.
+    "pdfplumber>=0.11",
+    # Retained only for reading user-uploaded contracts, where superscripts carry
+    # no meaning and the lighter dependency is preferable.
     "pypdf>=5.1",
     "python-docx>=1.1",
 ]
@@ -82,7 +89,7 @@ ignore = ["ANN401"]
 # `evals` is a repo-root package, not an installed dependency; without this
 # ruff sorts it into the third-party block.
 [tool.ruff.lint.isort]
-known-first-party = ["kontrakt_guard", "evals"]
+known-first-party = ["kontrakt_guard", "evals", "ingestion"]
 
 # ---------------------------------------------------------------------------
 # Types
