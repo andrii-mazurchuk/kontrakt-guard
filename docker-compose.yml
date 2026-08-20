@@ -5,13 +5,24 @@
 
 services:
   db:
-    image: pgvector/pgvector:pg17
+    # Built rather than pulled: the stock image has pgvector but no Polish
+    # full-text configuration, and Postgres ships none. See docker/db/Dockerfile.
+    build:
+      context: .
+      dockerfile: docker/db/Dockerfile
+    image: kontrakt-guard-db:pg17-polish
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-kontrakt_guard}
       POSTGRES_USER: ${POSTGRES_USER:-kontrakt}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kontrakt}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Published on a non-standard host port on purpose. A locally installed
+      # PostgreSQL is common on developer machines and binds 5432 first, so the
+      # container silently loses the race and every connection lands on the wrong
+      # server — which surfaces as "password authentication failed" rather than
+      # as a port conflict, and costs an hour to diagnose.
+      # The container port is unchanged, so the api service still uses 5432.
+      - "${POSTGRES_HOST_PORT:-55432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/initdb:/docker-entrypoint-initdb.d:ro
@@ -34,7 +45,11 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kontrakt_guard}
       POSTGRES_USER: ${POSTGRES_USER:-kontrakt}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kontrakt}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      # Soft default rather than `:?`. A hard requirement here fails interpolation
+      # for the whole file, so `docker compose up db` — which needs no API key —
+      # cannot start either. The application reports a missing key when it first
+      # needs one, which is both later and more precise.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
       EMBEDDING_REVISION: ${EMBEDDING_REVISION:-}
     ports:

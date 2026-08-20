@@ -5,8 +5,27 @@
 ```bash
 uv sync                  # creates .venv on Python 3.13, installs from uv.lock
 uv run pre-commit install
-cp .env.example .env     # then fill in ANTHROPIC_API_KEY
+cp .env.example .env     # then fill in ANTHROPIC_API_KEY and POSTGRES_PASSWORD
 ```
+
+## The database
+
+```bash
+docker compose up -d --build --wait db
+```
+
+Built rather than pulled. Stock PostgreSQL ships 29 text-search configurations
+and **Polish is not among them** — Snowball has no Polish stemmer. `docker/db/Dockerfile`
+adds a Hunspell Polish dictionary and `docker/initdb/02-polish-fts.sql` assembles a
+`polish` configuration from it. Without that, the lexical half of hybrid retrieval
+does no lemmatisation, and in a language this heavily inflected a question about
+`wynagrodzenia` never matches a statute saying `wynagrodzenie`.
+
+**The database is published on host port `55432`, not `5432`.** A locally installed
+PostgreSQL is common and binds 5432 first, and when it wins the race every
+connection lands on the wrong server — reported as `password authentication failed`
+rather than as a port conflict. Set `POSTGRES_PORT=55432` in `.env`; the container
+port is unchanged, so the `api` service still talks to 5432 inside the network.
 
 ## The commands CI runs
 
