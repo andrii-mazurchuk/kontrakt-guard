@@ -1,0 +1,37 @@
+{
+  "$comment": [
+    "Pins the corpus without committing it. `uv run python -m ingestion.fetch` downloads each",
+    "act to data/corpus/ (gitignored) and verifies it against sha256 here.",
+    "",
+    "IMPORTANT: ISAP regenerates the 'tekst ujednolicony' PDF whenever an amendment lands, so",
+    "these bytes are a moving target by design. A checksum mismatch is NOT a corruption error --",
+    "it means the law changed. Re-pin deliberately, and treat it as a corpus change that",
+    "invalidates comparisons against metrics recorded under the previous checksum."
+  ],
+  "acts": [
+    {
+      "slug": "kp",
+      "title_pl": "Ustawa z dnia 26 czerwca 1974 r. — Kodeks pracy",
+      "title_en": "Labour Code",
+      "eli": "DU/2025/277",
+      "publisher": "DU",
+      "year": 2025,
+      "pos": 277,
+      "variant": "U",
+      "variant_meaning": "tekst ujednolicony — consolidated text with later amendments folded in",
+      "url": "https://api.sejm.gov.pl/eli/acts/DU/2025/277/text/U/D20250277Lj.pdf",
+      "file_name": "D20250277Lj.pdf",
+      "sha256": "c08b1f6ec7861b1902f3b6031c1e3d9474ac385f88e9d9f887ca1933daefba68",
+      "pdf_creation_date": "D:20260818143440+02'00'",
+      "pages": 190,
+      "fetched_at": "2026-08-20T15:29:02+00:00",
+      "notes": [
+        "The base act DU/1974/141 also serves text.html, but that is the ORIGINAL 1974 text --",
+        "Art. 1 still refers to 'socjalistycznych stosunków pracy'. Do not use it.",
+        "The official tekst jednolity was announced 2025-02-14; amendments in Dz.U. 2025 poz. 807,",
+        "2025 poz. 1423, 2026 poz. 25 and 2026 poz. 1046 postdate it. The variant U PDF is",
+        "regenerated to include them, which is why it is the chosen source."
+      ]
+    }
+  ]
+}
