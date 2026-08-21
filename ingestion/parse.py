@@ -24,7 +24,23 @@ from ingestion.pdf_text import PageText
 # An article heading opens a line: "Art. 25.", "Art. 9^1.", "Art. 18^3a.".
 # Anchored at line start and requiring the capital A, so that in-text references
 # ("w rozumieniu art. 22 § 1") and footnote markers ("Kodeks pracy^1)") do not match.
-ARTICLE_RE = re.compile(r"^Art\.\s*(\d+(?:\^[0-9a-ząćęłńóśźż]+)*)\.\s*")
+#
+# The optional leading bracket is not cosmetic. ISAP marks provisions with a
+# pending amendment by wrapping the text currently in force in [square brackets]
+# and the replacement text, not yet in force, in <angle brackets>. Without the
+# bracket the heading is unrecognisable, and the article's entire text is absorbed
+# into its predecessor: Art. 94^3 (mobbing) disappeared and its text was attributed
+# to Art. 94^2, which for a citation is a factual error, not a ranking one.
+# The optional superscript form "18^[3d]" also appears inside these blocks.
+ARTICLE_RE = re.compile(
+    r"^(?P<bracket>[\[<])?Art\.\s*(?P<id>\d+(?:\^\[?[0-9a-ząćęłńóśźż]+\]?)*)\.\s*"
+)
+
+# A "<...>" block is law that takes effect on a future date. Answering today's
+# question from it would be wrong in the same way as answering from repealed law,
+# so those versions are not ingested — and the count is reported, because silently
+# dropping text is how corpora acquire holes.
+FUTURE_BRACKET = "<"
 
 # Paragraph markers within an article: "§ 1.", "§ 2^1.".
 PARAGRAPH_RE = re.compile(r"§\s*(\d+(?:\^[0-9a-z]+)*)\.\s*")
@@ -174,6 +190,20 @@ def _is_not_in_force(text: str) -> bool:
     return NOT_IN_FORCE_BODY_RE.match(text.strip()) is not None
 
 
+def _clean_id(raw: str) -> str:
+    """'18^[3d]' -> '18^3d'. ISAP brackets superscripts inside amendment blocks."""
+    return raw.replace("[", "").replace("]", "")
+
+
+def _strip_amendment_brackets(text: str) -> str:
+    """Remove the [ ] and < > that delimit a pending-amendment block.
+
+    They mark the boundary of the change, not the statute's wording, and would
+    otherwise be retrieved and quoted as if they were part of the law.
+    """
+    return text.replace("[", "").replace("]", "").replace("<", "").replace(">", "").strip()
+
+
 def parse_articles(pages: list[PageText], act: str) -> list[Article]:
     """Walk the document, emitting one Article per article heading.
 
@@ -190,11 +220,12 @@ def parse_articles(pages: list[PageText], act: str) -> list[Article]:
     current: _Pending | None = None
     buffer: list[str] = []
     pending_heading_level: int | None = None
+    skipped_future: list[str] = []
 
     def flush() -> None:
         if current is None:
             return
-        body = " ".join(buffer).strip()
+        body = _strip_amendment_brackets(" ".join(buffer))
         # Only when the entire body is the marker — see NOT_IN_FORCE_BODY_RE.
         whole_body = NOT_IN_FORCE_BODY_RE.match(body)
         articles.append(
@@ -235,8 +266,14 @@ def parse_articles(pages: list[PageText], act: str) -> list[Article]:
         article_match = ARTICLE_RE.match(stripped)
         if article_match:
             flush()
+            if article_match.group("bracket") == FUTURE_BRACKET:
+                # Not yet in force; skip it and everything until the next heading.
+                skipped_future.append(_clean_id(article_match.group("id")))
+                current = None
+                buffer = []
+                continue
             current = _Pending(
-                article=article_match.group(1),
+                article=_clean_id(article_match.group("id")),
                 title_path=heading.current(),
                 page=page_no,
             )

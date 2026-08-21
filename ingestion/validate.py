@@ -10,9 +10,15 @@ before anything downstream trusts it.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 from ingestion.parse import Article
+
+# A capitalised "Art. N." inside a body. In-text references are lowercase
+# ("w rozumieniu art. 22 § 1"), so the capital is what distinguishes a heading
+# that was missed from a citation that was intended.
+EMBEDDED_HEADING_RE = re.compile(r"(?<![\w.])Art\.\s*\d+(?:\^[0-9a-ząćęłńóśźż]+)*\.")
 
 # Kodeks pracy runs Art. 1 to Art. 305 with roughly 170 amendment-inserted
 # articles alongside. The band is wide enough to absorb ordinary amendment
@@ -70,6 +76,19 @@ def validate(articles: list[Article], act: str) -> list[str]:
             f"articles marked not-in-force but carrying substantial text "
             f"(paragraph-level repeal misread as article-level): {substantial[:10]}"
         )
+
+    # An article body must not contain another article's heading. When it does,
+    # the parser failed to recognise a boundary and swallowed the next article
+    # whole — the article vanishes from the corpus while its text is served under
+    # the wrong citation. Article numbering has legal gaps, so a missing id proves
+    # nothing; this is the signal that does.
+    swallowed = [
+        f"{a.display} contains {m.group(0)!r}"
+        for a in articles
+        if (m := EMBEDDED_HEADING_RE.search(a.text))
+    ]
+    if swallowed:
+        problems.append(f"articles that swallowed a following article: {swallowed[:10]}")
 
     if problems:
         raise ParseValidationError(
