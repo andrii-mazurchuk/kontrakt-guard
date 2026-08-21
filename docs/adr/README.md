@@ -15,3 +15,4 @@ nobody reads is worth nothing.
 | [0004](0004-file-based-metrics-tracking.md) | Metrics in a committed JSONL, not W&B or MLflow | Accepted |
 | [0005](0005-artifact-pipeline-cloud-deploy-deferred.md) | Publish images now, defer the cloud target | Accepted |
 | [0006](0006-trunk-based-branching.md) | Trunk-based branching with mandatory PRs | Accepted |
+| [0007](0007-pending-amendments.md) | Ingest the law in force, exclude future-dated amendments | Accepted |

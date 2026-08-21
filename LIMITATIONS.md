@@ -31,6 +31,18 @@ intervals on recall@k are wide: a handful of questions moving flips a percentage
 meaningful. Treat differences of a few points between configurations as noise unless the eval says
 otherwise.
 
+## The corpus is the law as at one moment, and only one
+
+The snapshot holds the text **in force on the day it was fetched**. Amendments
+already enacted but not yet effective are present in the source and deliberately
+excluded (see [ADR 0007](docs/adr/0007-pending-amendments.md)) — five such blocks
+in this snapshot take effect on 5 November 2026.
+
+The consequence is asymmetric and worth stating plainly: a question about a
+contract signed today gets the right answer, while a question about one starting
+after a pending change gets an answer that is confidently out of date, with
+nothing in the text to signal it. The system has no notion of time.
+
 ## Corpus scope and staleness
 
 The corpus is a snapshot of consolidated acts, pinned by checksum. It therefore excludes:
