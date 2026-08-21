@@ -39,8 +39,20 @@ HEADING_LEVEL = {"dział": 0, "rozdział": 1, "oddział": 2}
 # omitted when the consolidated text was compiled. All three must be kept out of
 # retrieval as governing law, but a question naming one deserves the specific
 # reason rather than silence — so the kind is preserved, not just the fact.
-NOT_IN_FORCE_RE = re.compile(
-    r"\((uchylony|uchylona|uchylone|utracił[ay]?\s+moc|utraciło\s+moc|pominięty|pominięte)\)",
+_NOT_IN_FORCE = r"uchylony|uchylona|uchylone|utracił[ay]?\s+moc|utraciło\s+moc|pominięty|pominięte"
+
+# Anchored to the WHOLE body, not merely present in it.
+#
+# Statutes repeal individual paragraphs constantly: Art. 171 § 2 is repealed while
+# paragraphs 1 and 3 to 5 remain the operative law on holiday pay. A substring search
+# marks the entire article dead, and since retrieval excludes repealed articles by
+# default that article becomes permanently unreachable — a silent, uncorrectable
+# recall miss that looks like a retrieval weakness. It wrongly condemned 34 of 477
+# articles, among them Art. 94 (employer obligations) and Art. 87 (wage deductions).
+#
+# The trailing group absorbs footnote references, as in "(utracił moc)^5)".
+NOT_IN_FORCE_BODY_RE = re.compile(
+    rf"^\(({_NOT_IN_FORCE})\)(\s*\^?\d*\)?)*$",
     re.IGNORECASE,
 )
 
@@ -73,6 +85,10 @@ class Paragraph(BaseModel):
         description="Canonical paragraph id, e.g. '1' or '2^1'. Empty if undivided."
     )
     text: str
+    repealed: bool = Field(
+        default=False,
+        description="This paragraph alone is not in force; the article may still be.",
+    )
 
 
 class Article(BaseModel):
@@ -136,7 +152,9 @@ def _split_paragraphs(body: str) -> list[Paragraph]:
     matches = list(PARAGRAPH_RE.finditer(body))
     if not matches:
         text = body.strip()
-        return [Paragraph(marker="", text=text)] if text else []
+        if not text:
+            return []
+        return [Paragraph(marker="", text=text, repealed=_is_not_in_force(text))]
 
     paragraphs: list[Paragraph] = []
     # Text before the first § belongs to the article, not to any paragraph; in
@@ -145,8 +163,15 @@ def _split_paragraphs(body: str) -> list[Paragraph]:
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
         text = body[match.end() : end].strip()
         if text:
-            paragraphs.append(Paragraph(marker=match.group(1), text=text))
+            paragraphs.append(
+                Paragraph(marker=match.group(1), text=text, repealed=_is_not_in_force(text))
+            )
     return paragraphs
+
+
+def _is_not_in_force(text: str) -> bool:
+    """Whether this text is *nothing but* a repeal marker."""
+    return NOT_IN_FORCE_BODY_RE.match(text.strip()) is not None
 
 
 def parse_articles(pages: list[PageText], act: str) -> list[Article]:
@@ -170,7 +195,8 @@ def parse_articles(pages: list[PageText], act: str) -> list[Article]:
         if current is None:
             return
         body = " ".join(buffer).strip()
-        not_in_force = NOT_IN_FORCE_RE.search(body)
+        # Only when the entire body is the marker — see NOT_IN_FORCE_BODY_RE.
+        whole_body = NOT_IN_FORCE_BODY_RE.match(body)
         articles.append(
             Article(
                 act=act,
@@ -178,8 +204,8 @@ def parse_articles(pages: list[PageText], act: str) -> list[Article]:
                 display=to_display(current.article),
                 title_path=list(current.title_path),
                 paragraphs=_split_paragraphs(body),
-                repealed=not_in_force is not None,
-                repeal_kind=not_in_force.group(1).lower() if not_in_force else "",
+                repealed=whole_body is not None,
+                repeal_kind=whole_body.group(1).lower() if whole_body else "",
                 page_start=current.page,
                 text=body,
             )

@@ -114,6 +114,48 @@ def test_in_force_articles_carry_no_repeal_kind(articles):
     assert _by_id(articles, "25").repeal_kind == ""
 
 
+def test_a_repealed_paragraph_does_not_condemn_its_article():
+    """Art. 171 § 2 is repealed; §§ 1 and 3 are the operative law on holiday pay.
+
+    Matching the repeal marker anywhere in the body marked the whole article dead.
+    Because retrieval excludes repealed articles by default, that made 34 of 477
+    live articles permanently unreachable — including Art. 94 and Art. 87 — a
+    silent recall cap indistinguishable from a retrieval weakness.
+    """
+    pages = [
+        PageText(
+            number=1,
+            text=(
+                "DZIAŁ SIÓDMY\n"
+                "Urlopy pracownicze\n"
+                "Art. 171. § 1. W przypadku niewykorzystania urlopu przysługuje ekwiwalent "
+                "pieniężny. § 2. (uchylony) § 3. Pracodawca nie ma obowiązku wypłacenia "
+                "ekwiwalentu, gdy strony postanowią o wykorzystaniu urlopu."
+            ),
+        )
+    ]
+    article = parse_articles(pages, act="kp")[0]
+
+    assert not article.repealed
+    assert article.repeal_kind == ""
+    assert [p.repealed for p in article.paragraphs] == [False, True, False]
+
+
+def test_an_article_that_is_only_a_marker_is_still_repealed():
+    pages = [
+        PageText(number=1, text="DZIAŁ PIERWSZY\nPrzepisy\nArt. 24. (uchylony)"),
+    ]
+    article = parse_articles(pages, act="kp")[0]
+    assert article.repealed and article.repeal_kind == "uchylony"
+
+
+def test_footnote_marker_after_a_repeal_marker_is_tolerated():
+    """The real text reads 'Art. 103. (utracił moc)^5)'."""
+    pages = [PageText(number=1, text="DZIAŁ CZWARTY\nObowiązki\nArt. 103. (utracił moc)^5)")]
+    article = parse_articles(pages, act="kp")[0]
+    assert article.repealed and article.repeal_kind == "utracił moc"
+
+
 def test_paragraphs_are_split_on_the_section_marker(articles):
     art = _by_id(articles, "9")
     assert [p.marker for p in art.paragraphs] == ["1", "2", "3", "4"]
