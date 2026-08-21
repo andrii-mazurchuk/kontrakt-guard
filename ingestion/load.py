@@ -83,8 +83,14 @@ def load_chunks(
     chunks: Sequence[Chunk],
     embedder: SupportsEmbedding,
     show_progress: bool = True,
+    prune: bool = True,
 ) -> list[str]:
-    """Embed and upsert every chunk. Returns report lines."""
+    """Embed and upsert every chunk. Returns report lines.
+
+    `prune` removes rows for these acts that this load did not produce, which is
+    correct when loading a whole act and wrong when loading a subset. Pass False
+    for a partial load.
+    """
     if not chunks:
         return ["no chunks to load"]
 
@@ -131,13 +137,58 @@ def load_chunks(
 
     with conn.cursor() as cur:
         cur.executemany(UPSERT, rows)
-    conn.commit()
 
-    return [
+    report = [
         f"loaded {len(rows)} chunks ({expected}-dim embeddings)",
         f"  repealed:  {sum(c.repealed for c in chunks)}",
         f"  max tokens: {max(c.n_tokens for c in chunks)}",
     ]
+
+    if prune:
+        removed = prune_stale(conn, chunks)
+        if removed:
+            report.append(f"  pruned {removed} stale chunk(s) from a previous parse")
+
+    conn.commit()
+    return report
+
+
+def prune_stale(conn: psycopg.Connection[DictRow], chunks: Sequence[Chunk]) -> int:
+    """Delete rows for these acts that this load did not produce.
+
+    The upsert alone cannot do this. When a chunking change makes an article
+    split into fewer pieces, the surplus rows from the previous parse survive
+    with nothing to overwrite them — still indexed, still retrievable, and
+    carrying text from a corpus version that no longer exists. Nothing errors;
+    the stale chunk simply competes for a slot at k=5.
+    """
+    acts = sorted({c.act for c in chunks})
+    removed = 0
+    for act in acts:
+        keys = [(c.article, c.paragraph, c.part_index) for c in chunks if c.act == act]
+        result = conn.execute(
+            """
+            DELETE FROM chunks c
+            WHERE c.act = %(act)s
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest(
+                      %(articles)s::text[], %(paragraphs)s::text[], %(parts)s::int[]
+                  ) AS k(article, paragraph, part_index)
+                  WHERE k.article = c.article
+                    AND k.paragraph = c.paragraph
+                    AND k.part_index = c.part_index
+              )
+            """,
+            {
+                "act": act,
+                "articles": [k[0] for k in keys],
+                "paragraphs": [k[1] for k in keys],
+                "parts": [k[2] for k in keys],
+            },
+        )
+        removed += result.rowcount
+    return removed
 
 
 def corpus_stats(conn: psycopg.Connection[DictRow]) -> dict[str, int]:

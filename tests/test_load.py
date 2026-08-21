@@ -139,6 +139,47 @@ def test_dimension_mismatch_is_refused_before_insert(conn):
         load_chunks(conn, _as_test_act([make_chunk()]), StubEmbedder(dim=384), show_progress=False)
 
 
+def test_stale_chunks_from_a_previous_parse_are_pruned(conn):
+    """A chunking change that produces fewer pieces must not leave orphans.
+
+    The upsert cannot remove them: with nothing to overwrite them they survive,
+    still indexed and still retrievable, carrying text from a corpus version that
+    no longer exists. Nothing errors — the stale chunk just competes for a slot.
+    """
+    split = _as_test_act([make_chunk("25", "1", 0), make_chunk("25", "1", 1)])
+    load_chunks(conn, split, StubEmbedder(), show_progress=False)
+    assert conn.execute("SELECT count(*) AS n FROM chunks WHERE act='kp-test'").fetchone()["n"] == 2
+
+    # Re-parsed: the article now fits in one chunk.
+    whole = _as_test_act([make_chunk("25", "1", 0)])
+    load_chunks(conn, whole, StubEmbedder(), show_progress=False)
+
+    rows = conn.execute(
+        "SELECT part_index FROM chunks WHERE act='kp-test' ORDER BY part_index"
+    ).fetchall()
+    assert [r["part_index"] for r in rows] == [0]
+
+
+def test_prune_can_be_disabled_for_a_partial_load(conn):
+    load_chunks(conn, _as_test_act([make_chunk("25")]), StubEmbedder(), show_progress=False)
+    load_chunks(
+        conn, _as_test_act([make_chunk("26")]), StubEmbedder(), show_progress=False, prune=False
+    )
+    row = conn.execute("SELECT count(*) AS n FROM chunks WHERE act='kp-test'").fetchone()
+    assert row["n"] == 2
+
+
+def test_prune_leaves_other_acts_untouched(conn):
+    """Loading one act must never delete another."""
+    load_chunks(conn, _as_test_act([make_chunk("25")]), StubEmbedder(), show_progress=False)
+    before = conn.execute("SELECT count(*) AS n FROM chunks WHERE act='kp'").fetchone()["n"]
+
+    load_chunks(conn, _as_test_act([make_chunk("26")]), StubEmbedder(), show_progress=False)
+
+    after = conn.execute("SELECT count(*) AS n FROM chunks WHERE act='kp'").fetchone()["n"]
+    assert after == before
+
+
 def test_column_dimension_matches_the_production_model(conn):
     """vector(1024) is multilingual-e5-large. The two must not drift apart."""
     assert column_dimension(conn) == DIM
