@@ -23,6 +23,33 @@ no F1 score can paper over:
 - **Generator and grader share assumptions.** The same understanding shaped both what gets planted
   and what counts as a correct detection. Genuinely independent labelling would be stronger.
 
+## The fusion weight was tuned on the set it is reported over
+
+`hybrid_alpha` was swept across 0.6, 0.7 and 0.8 against the same 97 gold questions the headline
+recall@k is computed on. There is no held-out split. With a single parameter and 97 questions the
+distortion is small, but it is not zero: some part of the 4.6-point gain over dense-only retrieval is
+fitted to this particular set rather than to Polish legal retrieval in general.
+
+Treat the leg comparison in the README as sound — the gap between 46.9% and 84.8% is far too wide to
+be an artefact — and the precise value of α as the softest number in the table.
+
+## What in the gold set was human-checked, and what was not
+
+The 97 questions come from two sources and carry different evidentiary weight.
+Reporting one number over both without saying so would overstate the weaker half.
+
+- **62 PIP-derived questions** use the article citations that Państwowa Inspekcja
+  Pracy gives in its own answers. They were accepted **on the source's authority**
+  and machine-checked for existence in the corpus, not independently re-derived
+  from the statute by a human. Where PIP states a rule without naming an article,
+  the question was dropped rather than have an article guessed for it.
+- **35 statute-derived questions** were written against article text read directly
+  through `retrieval/lookup.py`, and reviewed.
+
+Neither half was checked by a lawyer. Ground truth in both was taken from a source
+or from the statute — never from this system's own retrieval, which would make
+recall@k measure the system against itself.
+
 ## The gold set is small and single-annotator
 
 Layer 1 uses roughly 30–50 questions derived from Państwowa Inspekcja Pracy material, with

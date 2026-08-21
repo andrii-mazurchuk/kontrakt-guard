@@ -28,12 +28,35 @@ retrieval config hash) recorded alongside it.
 
 ### Layer 1 — retrieval quality
 
-Recall@k on ground-truth article IDs, over a gold set of employment-law questions derived from
-Państwowa Inspekcja Pracy guidance.
+Recall@k on ground-truth article IDs. **k counts articles, not chunks** — an article split across
+several chunks would otherwise consume several of the five slots at k=5 and flatter the score.
+
+The gold set is 97 questions: 62 taken from Państwowa Inspekcja Pracy guidance with the article
+citations PIP itself gives, and 35 written against the statute text. Ground truth never comes from
+this system's own retrieval, which would make the metric measure the system against itself.
 
 <!-- METRICS:LAYER1:START -->
-_No eval runs recorded yet._
+| Metric | k=3 | k=5 | k=10 |
+|---|---|---|---|
+| Recall@k on article IDs | 77.1% | 84.8% | 92.0% |
+Gold set: **97** questions. MRR **0.735**.
+
+<sub>Run `550d521a` · 2026-08-21T17:07:07+00:00 · embeddings `intfloat/multilingual-e5-large@3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3` · config `5a945bc32acf` · $0.00 · 114s</sub>
 <!-- METRICS:LAYER1:END -->
+
+**What each retrieval leg contributes**, measured over the same gold set. This is the argument for
+hybrid retrieval stated as evidence rather than as assertion — and it very nearly went the other way:
+
+| Configuration | recall@5 | MRR |
+|---|---|---|
+| Lexical only (Polish full-text) | 46.9% | 0.410 |
+| Hybrid, Reciprocal Rank Fusion | 75.5% | 0.627 |
+| Dense only (multilingual-e5-large) | 80.2% | 0.699 |
+| **Hybrid, weighted α=0.7** | **84.8%** | **0.735** |
+
+RRF weights both legs equally. Because the lexical leg is far weaker here, equal weighting pushed its
+noise into the top ranks and made hybrid retrieval **worse than dense alone**. Weighting the dense leg
+at 0.7 recovers the gain and beats it by 4.6 points. See [ADR 0003](docs/adr/0003-hybrid-retrieval-without-reranker.md).
 
 ### Layer 2 — audit quality
 
