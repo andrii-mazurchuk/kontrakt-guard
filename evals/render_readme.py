@@ -53,7 +53,9 @@ def render_layer1(row: MetricsRow | None) -> str:
         cells.append("—" if value is None else f"{value:.1%}")
     body = f"| Recall@k on article IDs | {' | '.join(cells)} |"
 
-    extra = [f"\nGold set: **{m.n_questions}** PIP-derived questions."]
+    # Not "PIP-derived": only part of the set is. Overstating provenance in the
+    # headline table is precisely the quiet inflation the generator exists to stop.
+    extra = [f"\nGold set: **{m.n_questions}** questions."]
     if m.mrr is not None:
         extra.append(f" MRR **{m.mrr:.3f}**.")
     if m.faithfulness is not None:

@@ -52,8 +52,17 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 10
     bm25_candidates: int = 25
     vector_candidates: int = 25
-    # Weight of the dense leg when merging the two candidate lists.
-    hybrid_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    # How the two candidate lists are combined. Chosen by measurement, not taste:
+    # Reciprocal Rank Fusion weights both legs equally, and on this corpus the
+    # lexical leg is far weaker than the dense one (recall@5 of 46.9% against
+    # 80.2%), so equal weighting injected noise into the top ranks and made hybrid
+    # retrieval *worse* than dense alone. See ADR 0003.
+    fusion: Literal["weighted", "rrf"] = "weighted"
+
+    # Weight of the dense leg when merging. Swept over the gold set: 0.6 gave
+    # recall@5 of 83.2%, 0.7 gave 84.8%, 0.8 gave 81.7%.
+    hybrid_alpha: float = Field(default=0.7, ge=0.0, le=1.0)
 
     # --- Eval cost control --------------------------------------------------
     eval_max_cost_usd: float = 5.0
@@ -78,6 +87,7 @@ class Settings(BaseSettings):
             "retrieval_top_k": self.retrieval_top_k,
             "bm25_candidates": self.bm25_candidates,
             "vector_candidates": self.vector_candidates,
+            "fusion": self.fusion,
             "hybrid_alpha": self.hybrid_alpha,
             "model_cheap": self.model_cheap,
             "model_strong": self.model_strong,

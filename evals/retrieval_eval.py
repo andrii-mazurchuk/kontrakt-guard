@@ -26,18 +26,22 @@ score.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Literal
 
 import psycopg
 from psycopg.rows import DictRow
 
 from evals.gold import GoldQuestion, load_gold
+from evals.schema import HISTORY_PATH, MetricsRow, RetrievalMetrics, RunContext, append_row
 from ingestion.chunk import query_input
 from ingestion.db import connect
 from ingestion.embed import Embedder
+from ingestion.manifest import load_manifest
 from kontrakt_guard.config import Settings, get_settings
 from retrieval.search import dense_search, lexical_search, merge
 
@@ -52,6 +56,8 @@ def retrieved_articles(
     settings: Settings,
     leg: Leg,
     limit: int,
+    fusion: Literal["rrf", "weighted"] = "rrf",
+    alpha: float | None = None,
 ) -> list[str]:
     """Ranked, de-duplicated article ids for one question.
 
@@ -76,7 +82,13 @@ def retrieved_articles(
     else:
         # Merge over the full candidate pool, then collapse — collapsing first
         # would discard the second leg's evidence for an article.
-        hits = merge(lexical, dense, k=len(lexical) + len(dense), fusion="rrf")
+        hits = merge(
+            lexical,
+            dense,
+            k=len(lexical) + len(dense),
+            fusion=fusion,
+            alpha=settings.hybrid_alpha if alpha is None else alpha,
+        )
 
     ordered: list[str] = []
     for hit in hits:
@@ -94,6 +106,8 @@ def score(
     settings: Settings,
     leg: Leg = "hybrid",
     ks: Sequence[int] = REPORTED_K,
+    fusion: Literal["rrf", "weighted"] = "rrf",
+    alpha: float | None = None,
 ) -> tuple[dict[int, float], dict[int, float], dict[int, float], list[str]]:
     """Return (recall@k, hit_rate@k, mrr, ids missed at the largest reported k)."""
     top = max(ks)
@@ -103,7 +117,9 @@ def score(
     missed: list[str] = []
 
     for question in questions:
-        ranked = retrieved_articles(conn, question.question, embedder, settings, leg, top)
+        ranked = retrieved_articles(
+            conn, question.question, embedder, settings, leg, top, fusion, alpha
+        )
         truth = set(question.ground_truth_articles)
 
         for k in ks:
@@ -126,10 +142,62 @@ def score(
     )
 
 
+def _git(*args: str) -> str:
+    return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def build_row(
+    questions: Sequence[GoldQuestion],
+    recall: dict[int, float],
+    mrr: float,
+    missed: list[str],
+    duration: float,
+    settings: Settings,
+    embedder: Embedder,
+) -> MetricsRow:
+    """Assemble one history row, with enough provenance to reproduce the number."""
+    # Resolve the embedding revision rather than recording the empty default.
+    # retrieval_config_hash includes it, so an unresolved revision produces a hash
+    # that silently fails to distinguish two different versions of the same model.
+    revision = embedder.resolved_revision()
+    pinned = settings.model_copy(update={"embedding_revision": revision})
+
+    context = RunContext(
+        commit=_git("rev-parse", "HEAD"),
+        branch=_git("rev-parse", "--abbrev-ref", "HEAD"),
+        timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
+        embedding_model=settings.embedding_model,
+        embedding_revision=revision,
+        model_cheap=settings.model_cheap,
+        model_strong=settings.model_strong,
+        retrieval_config_hash=pinned.retrieval_config_hash(),
+        corpus_manifest_sha=load_manifest().digest(),
+        # Layer 1 makes no LLM calls; that is what lets it gate every pull request.
+        api_cost_usd=0.0,
+        duration_s=duration,
+    )
+    return MetricsRow(
+        context=context,
+        metrics=RetrievalMetrics(
+            n_questions=len(questions),
+            recall_at_k=dict(recall),
+            mrr=mrr,
+            faithfulness=None,
+            misses_at_5=missed,
+        ),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--leg", choices=["hybrid", "lexical", "dense"], default="hybrid")
-    parser.add_argument("--fusion", choices=["rrf", "weighted"], default="rrf")
+    parser.add_argument("--fusion", choices=["rrf", "weighted"], default=None)
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=None,
+        help="Dense weight for weighted fusion. Defaults to Settings.hybrid_alpha.",
+    )
     parser.add_argument("--record", action="store_true", help="Append to metrics/history.jsonl.")
     args = parser.parse_args()
 
@@ -140,13 +208,23 @@ def main() -> int:
 
     settings = get_settings()
     embedder = Embedder(settings)
+    fusion = args.fusion or settings.fusion
 
     started = time.monotonic()
     with connect(settings) as conn:
-        recall, hit_rate, mrr, missed = score(questions, conn, embedder, settings, args.leg)
+        recall, hit_rate, mrr, missed = score(
+            questions,
+            conn,
+            embedder,
+            settings,
+            args.leg,
+            fusion=fusion,
+            alpha=args.alpha,
+        )
     duration = time.monotonic() - started
 
-    print(f"Layer 1 — retrieval [{args.leg}], {len(questions)} gold questions\n")
+    label = args.leg if args.leg != "hybrid" else f"{args.leg}/{fusion}"
+    print(f"Layer 1 — retrieval [{label}], {len(questions)} gold questions\n")
     print(f"{'k':>4}  {'recall@k':>10}  {'hit_rate@k':>11}")
     for k in REPORTED_K:
         print(f"{k:>4}  {recall[k]:>9.1%}  {hit_rate[k]:>10.1%}")
@@ -155,8 +233,17 @@ def main() -> int:
         print(f"\nmissed at k=5 ({len(missed)}): {', '.join(missed)}")
 
     if args.record:
-        print("\n--record is not wired up until the gold set is reviewed.", file=sys.stderr)
-        return 1
+        row = build_row(
+            questions=questions,
+            recall=recall,
+            mrr=mrr[0],
+            missed=missed,
+            duration=duration,
+            settings=settings,
+            embedder=embedder,
+        )
+        append_row(row)
+        print(f"\nrecorded to {HISTORY_PATH} (corpus {row.context.corpus_manifest_sha[:12]})")
     return 0
 
 
