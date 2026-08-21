@@ -89,7 +89,7 @@ ignore = ["ANN401"]
 # `evals` is a repo-root package, not an installed dependency; without this
 # ruff sorts it into the third-party block.
 [tool.ruff.lint.isort]
-known-first-party = ["kontrakt_guard", "evals", "ingestion"]
+known-first-party = ["kontrakt_guard", "evals", "ingestion", "retrieval"]
 
 # ---------------------------------------------------------------------------
 # Types
