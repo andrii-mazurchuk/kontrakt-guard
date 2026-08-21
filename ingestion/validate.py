@@ -61,6 +61,16 @@ def validate(articles: list[Article], act: str) -> list[str]:
     if hollow:
         problems.append(f"articles with suspiciously little text: {hollow[:10]}")
 
+    # An article marked not-in-force should be nothing but the marker. A long one
+    # means a paragraph-level repeal was mistaken for an article-level one, which
+    # removes a live article from retrieval and caps recall with no visible error.
+    substantial = [a.display for a in articles if a.repealed and len(a.text) > 120]
+    if substantial:
+        problems.append(
+            f"articles marked not-in-force but carrying substantial text "
+            f"(paragraph-level repeal misread as article-level): {substantial[:10]}"
+        )
+
     if problems:
         raise ParseValidationError(
             f"{act}: parse failed {len(problems)} structural check(s)\n  " + "\n  ".join(problems)
