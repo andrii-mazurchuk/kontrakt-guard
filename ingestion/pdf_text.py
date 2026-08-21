@@ -126,8 +126,33 @@ def _render_line(chars: list[dict[str, Any]], body_size: float) -> str:
     return re.sub(r"\s+", " ", "".join(out)).strip()
 
 
+def _body_right_edge(pdf: Any, body_size: float) -> float:
+    """Rightmost extent of the main text column.
+
+    ISAP consolidated texts carry amendment notes ("Nowe brzmienie", the date a
+    change takes effect) in a narrow right-hand margin. Those notes sit at the
+    same vertical positions as the body, so line grouping interleaves them into
+    the sentences they annotate — a paragraph acquires fragments like
+    "^art. ^18[3d] ^we" and "5.11.2026 r. (Dz." spliced mid-clause, and the
+    article heading they precede stops being recognisable.
+
+    The two columns separate cleanly by geometry: body text ends around x=471 and
+    the margin begins near x=480. Measuring the boundary rather than assuming it
+    keeps this working if the layout changes.
+    """
+    edges = [
+        float(char["x1"])
+        for page in pdf.pages
+        for char in page.chars
+        if abs(char["size"] - body_size) < 0.5
+    ]
+    if not edges:
+        raise ValueError("no body-size glyphs found; is this a scanned PDF?")
+    return max(edges)
+
+
 def extract_pages(path: Path) -> list[PageText]:
-    """Extract every page, superscripts marked, page furniture removed."""
+    """Extract every page, superscripts marked, furniture and margin notes removed."""
     pages: list[PageText] = []
 
     with pdfplumber.open(path) as pdf:
@@ -135,11 +160,15 @@ def extract_pages(path: Path) -> list[PageText]:
         # happens to be mostly headings would otherwise mis-detect its body size.
         sample = [c for page in pdf.pages[:20] for c in page.chars]
         body_size = _dominant_size(sample)
+        right_edge = _body_right_edge(pdf, body_size)
 
         for index, page in enumerate(pdf.pages, start=1):
             lines: list[str] = []
             for line in page.extract_text_lines(return_chars=True, strip=True):
-                rendered = _render_line(line["chars"], body_size)
+                # A glyph starting beyond the body column belongs to the margin.
+                # Superscripts inside the text flow always start within it.
+                chars = [c for c in line["chars"] if c["x0"] <= right_edge]
+                rendered = _render_line(chars, body_size)
                 if rendered and not _is_furniture(rendered):
                     lines.append(rendered)
             pages.append(PageText(number=index, text="\n".join(lines)))

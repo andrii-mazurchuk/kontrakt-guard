@@ -141,6 +141,70 @@ def test_a_repealed_paragraph_does_not_condemn_its_article():
     assert [p.repealed for p in article.paragraphs] == [False, True, False]
 
 
+def test_bracketed_heading_is_recognised_as_an_article():
+    """ISAP wraps text with a pending amendment in [square brackets].
+
+    Without matching the bracket the heading is invisible and the article's whole
+    text is absorbed into its predecessor. That is how Art. 94³ (mobbing)
+    disappeared while its text was served under Art. 94² — a wrong citation, which
+    for a legal answer is a factual error rather than a ranking one.
+    """
+    pages = [
+        PageText(
+            number=1,
+            text=(
+                "DZIAŁ CZWARTY\n"
+                "Obowiązki\n"
+                "Art. 94^2. Pracodawca jest obowiązany informować pracowników.\n"
+                "[Art. 94^3. § 1. Pracodawca jest obowiązany przeciwdziałać mobbingowi.]"
+            ),
+        )
+    ]
+    articles = parse_articles(pages, act="kp")
+
+    assert [a.article for a in articles] == ["94^2", "94^3"]
+    assert "mobbing" not in _by_id(articles, "94^2").text
+    assert "mobbingowi" in _by_id(articles, "94^3").text
+
+
+def test_future_law_in_angle_brackets_is_not_ingested():
+    """A <...> block takes effect on a future date.
+
+    Answering today's question from it is wrong in the same way as answering from
+    repealed law, and it would collide with the in-force version's article id.
+    """
+    pages = [
+        PageText(
+            number=1,
+            text=(
+                "DZIAŁ CZWARTY\n"
+                "Obowiązki\n"
+                "[Art. 94^3. § 1. Obecne brzmienie przepisu o mobbingu.]\n"
+                "<Art. 94^[3]. § 1. Przyszłe brzmienie przepisu o mobbingu.>\n"
+                "<Art. 94^[3a]. § 1. Zupełnie nowy przepis.>"
+            ),
+        )
+    ]
+    articles = parse_articles(pages, act="kp")
+
+    assert [a.article for a in articles] == ["94^3"]
+    assert "Obecne brzmienie" in articles[0].text
+    assert "Przyszłe" not in articles[0].text
+
+
+def test_amendment_brackets_are_stripped_from_article_text():
+    """The brackets delimit the change, not the statute's wording."""
+    pages = [PageText(number=1, text="DZIAŁ\nX\n[Art. 55. § 1. Pracownik może rozwiązać umowę.]")]
+    article = parse_articles(pages, act="kp")[0]
+    assert "[" not in article.text and "]" not in article.text
+
+
+def test_bracketed_superscript_id_is_normalised():
+    """Inside an amendment block ISAP writes the superscript as 18^[3d]."""
+    pages = [PageText(number=1, text="DZIAŁ\nX\n<Art. 18^[3f]. § 1. Nowy przepis.>")]
+    assert parse_articles(pages, act="kp") == []
+
+
 def test_an_article_that_is_only_a_marker_is_still_repealed():
     pages = [
         PageText(number=1, text="DZIAŁ PIERWSZY\nPrzepisy\nArt. 24. (uchylony)"),
@@ -213,6 +277,38 @@ def test_validate_rejects_out_of_order_articles():
         art.title_path = ["DZIAŁ PIERWSZY"]
     with pytest.raises(ParseValidationError, match="out of statutory order"):
         validate([a, b], act="unknown-act")
+
+
+def test_validate_rejects_an_article_that_swallowed_the_next_one():
+    """The check that would have caught the bracketed-heading bug immediately.
+
+    Article numbering has legal gaps, so a missing id proves nothing. A capitalised
+    heading sitting inside another article's body does.
+    """
+    swallowed = Article(
+        act="kp",
+        article="94^2",
+        display="Art. 94²",
+        page_start=1,
+        text="Pracodawca informuje pracowników. Art. 94^3. Pracodawca przeciwdziała mobbingowi.",
+    )
+    swallowed.title_path = ["DZIAŁ CZWARTY"]
+    with pytest.raises(ParseValidationError, match="swallowed a following article"):
+        validate([swallowed], act="unknown-act")
+
+
+def test_validate_tolerates_lowercase_in_text_references():
+    """'w rozumieniu art. 22 § 1' is a citation, not a missed heading."""
+    citing = Article(
+        act="kp",
+        article="25",
+        display="Art. 25",
+        page_start=1,
+        text="Umowę zawiera się zgodnie z art. 22 § 1 oraz art. 29 niniejszego kodeksu.",
+    )
+    citing.title_path = ["DZIAŁ DRUGI"]
+    report = validate([citing], act="unknown-act")
+    assert report
 
 
 def test_validate_rejects_hollow_articles():
