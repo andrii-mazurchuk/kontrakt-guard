@@ -29,9 +29,10 @@ import argparse
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal
 
 import psycopg
@@ -39,6 +40,8 @@ from psycopg.rows import DictRow
 
 from evals.gold import GoldQuestion, load_gold
 from evals.schema import HISTORY_PATH, MetricsRow, RetrievalMetrics, RunContext, append_row
+from graphs.llm import Usage, cheap_model
+from graphs.qa_flow import rewrite_question
 from ingestion.chunk import query_input
 from ingestion.db import connect, lexical_index_is_stale
 from ingestion.embed import Embedder
@@ -82,16 +85,23 @@ def retrieved_articles(
     fusion: Literal["rrf", "weighted"] = "rrf",
     alpha: float | None = None,
     ranking: Ranking | None = None,
+    rewriter: Callable[[str], str] | None = None,
 ) -> list[str]:
     """Ranked, de-duplicated article ids for one question.
 
     Chunks collapse to articles keeping the best rank of each, so `limit` means
     distinct articles.
+
+    `rewriter` is the flow's understand node. Passing it here rather than
+    measuring it separately is deliberate: a query rewrite is a *retrieval*
+    change, so the harness that already scores retrieval is the one that can say
+    whether it earns its place.
     """
+    query = rewriter(question) if rewriter else question
     lexical = (
         lexical_search(
             conn,
-            question,
+            query,
             settings.bm25_candidates,
             ranking=ranking or settings.lexical_ranking,
             k1=settings.bm25_k1,
@@ -101,7 +111,7 @@ def retrieved_articles(
         else []
     )
     dense = (
-        dense_search(conn, embedder.encode_query(query_input(question)), settings.vector_candidates)
+        dense_search(conn, embedder.encode_query(query_input(query)), settings.vector_candidates)
         if leg in ("hybrid", "dense")
         else []
     )
@@ -140,6 +150,7 @@ def score(
     fusion: Literal["rrf", "weighted"] = "rrf",
     alpha: float | None = None,
     ranking: Ranking | None = None,
+    rewriter: Callable[[str], str] | None = None,
 ) -> Scores:
     recall_totals = dict.fromkeys(ks, 0.0)
     hit_totals = dict.fromkeys(ks, 0.0)
@@ -153,7 +164,16 @@ def score(
         # so pool recall is the ceiling on everything downstream — and the number
         # that says whether to invest in the legs or in the ranking between them.
         ranked = retrieved_articles(
-            conn, question.question, embedder, settings, leg, POOL_LIMIT, fusion, alpha, ranking
+            conn,
+            question.question,
+            embedder,
+            settings,
+            leg,
+            POOL_LIMIT,
+            fusion,
+            alpha,
+            ranking,
+            rewriter,
         )
         truth = set(question.ground_truth_articles)
         pool_total += len(truth & set(ranked)) / len(truth)
@@ -191,6 +211,7 @@ def build_row(
     duration: float,
     settings: Settings,
     embedder: Embedder,
+    api_cost_usd: float = 0.0,
 ) -> MetricsRow:
     """Assemble one history row, with enough provenance to reproduce the number."""
     # Resolve the embedding revision rather than recording the empty default.
@@ -209,8 +230,10 @@ def build_row(
         model_strong=settings.model_strong,
         retrieval_config_hash=pinned.retrieval_config_hash(),
         corpus_manifest_sha=load_manifest().digest(),
-        # Layer 1 makes no LLM calls; that is what lets it gate every pull request.
-        api_cost_usd=0.0,
+        # Zero unless --rewrite was used. Layer 1 is otherwise free, which is what
+        # would let it gate a pull request; the rewrite node is the one part of it
+        # that costs money, so its cost is recorded rather than assumed absent.
+        api_cost_usd=api_cost_usd,
         duration_s=duration,
     )
     return MetricsRow(
@@ -241,6 +264,11 @@ def main() -> int:
         default=None,
         help="Lexical scoring function. Defaults to Settings.lexical_ranking.",
     )
+    parser.add_argument(
+        "--rewrite",
+        action="store_true",
+        help="Route questions through the flow's understand node first. BILLABLE.",
+    )
     parser.add_argument("--record", action="store_true", help="Append to metrics/history.jsonl.")
     args = parser.parse_args()
 
@@ -255,6 +283,17 @@ def main() -> int:
 
     ranking = args.ranking or settings.lexical_ranking
     uses_lexical = args.leg in ("hybrid", "lexical")
+
+    # The only billable path through Layer 1. Built here rather than inside the
+    # scoring loop so a missing key fails before the corpus is touched.
+    usage = Usage()
+    rewriter: Callable[[str], str] | None = None
+    if args.rewrite:
+        if not settings.anthropic_api_key.get_secret_value():
+            print("--rewrite makes billable calls and ANTHROPIC_API_KEY is unset", file=sys.stderr)
+            return 1
+        model = cheap_model(settings)
+        rewriter = partial(rewrite_question, model, usage=usage)
 
     started = time.monotonic()
     with connect(settings) as conn:
@@ -278,12 +317,15 @@ def main() -> int:
             fusion=fusion,
             alpha=args.alpha,
             ranking=ranking,
+            rewriter=rewriter,
         )
     duration = time.monotonic() - started
 
     label = args.leg if args.leg != "hybrid" else f"{args.leg}/{fusion}"
     if uses_lexical:
         label += f", {ranking}"
+    if args.rewrite:
+        label += ", rewritten"
     print(f"Layer 1 — retrieval [{label}], {len(questions)} gold questions\n")
     print(f"{'k':>4}  {'recall@k':>10}  {'hit_rate@k':>11}")
     for k in REPORTED_K:
@@ -297,6 +339,8 @@ def main() -> int:
     print(
         f"candidate-pool recall: {scores.pool_recall:.1%} ({headroom:+.1%} headroom above recall@5)"
     )
+    if args.rewrite:
+        print(f"query rewrite: {usage.summary()}")
     if scores.missed:
         print(f"\nmissed at k=5 ({len(scores.missed)}): {', '.join(scores.missed)}")
 
@@ -309,6 +353,7 @@ def main() -> int:
             duration=duration,
             settings=settings,
             embedder=embedder,
+            api_cost_usd=usage.cost_usd,
         )
         append_row(row)
         print(f"\nrecorded to {HISTORY_PATH} (corpus {row.context.corpus_manifest_sha[:12]})")
