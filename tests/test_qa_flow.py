@@ -326,3 +326,45 @@ def test_rewrite_question_falls_back_when_the_call_fails():
     model = ScriptedModel({"parsed": None, "raw": ai(), "parsing_error": "boom"})
 
     assert rewrite_question(cast(BaseChatModel, model), "pytanie", usage) == "pytanie"
+
+
+# --- citation canonicalisation ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "act,article",
+    [
+        ("kp", "25"),
+        ("Kodeks pracy", "25 § 2"),
+        ("KP", "art. 25"),
+        ("k.p.", "25"),
+    ],
+)
+def test_a_grounded_citation_is_recognised_however_it_is_spelled(act, article):
+    """Found by the first live call, which cost the run its entire citation list.
+
+    The model answered correctly, cited `Kodeks pracy art. 25 § 2`, and the
+    verifier — comparing raw strings against a corpus keyed ("kp", "25") —
+    reported every citation as unsupported. Strictness was right; the comparison
+    was not.
+    """
+    supported, unsupported = _verify_citations([Citation(act=act, article=article)], [hit("25")])
+
+    assert unsupported == []
+    # Returned canonically, so a caller never sees the model's spelling.
+    assert (supported[0].act, supported[0].article) == ("kp", "25")
+
+
+def test_normalising_does_not_soften_the_guardrail():
+    """The point of the check survives: an unretrieved article is still caught."""
+    _, unsupported = _verify_citations(
+        [Citation(act="Kodeks pracy", article="999 § 1")], [hit("25")]
+    )
+    assert unsupported == ["Kodeks pracy 999 § 1"]
+
+
+def test_passages_carry_the_corpus_key_the_model_must_copy():
+    strong = ScriptedModel(parsed(Answer(answer="…", citations=[]), model="claude-sonnet-5"))
+    make_flow(strong=strong).answer(QAState(question="pytanie", graded=[hit("29^3")]))
+
+    assert "[kp:29^3]" in strong.calls[0][1].content

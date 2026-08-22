@@ -69,6 +69,17 @@ class Usage:
         )
 
 
+# Models that reject the `temperature` parameter outright, with
+# "`temperature` is deprecated for this model." — a 400, not a warning. Found by
+# a one-question smoke test before the full gold-set run, which is the entire
+# argument for spending two cents before spending two dollars.
+#
+# An explicit set rather than a try/retry: it is greppable, and a new model that
+# also rejects the parameter fails on the first call with a message that names
+# the cause, rather than silently costing an extra round trip per call.
+TEMPERATURE_UNSUPPORTED = frozenset({"claude-sonnet-5"})
+
+
 def cheap_model(settings: Settings, temperature: float = 0.0) -> ChatAnthropic:
     """Haiku, for the high-volume steps: query rewriting and chunk grading."""
     return _model(settings.model_cheap, settings, temperature, max_tokens=1024)
@@ -84,13 +95,15 @@ def _model(name: str, settings: Settings, temperature: float, max_tokens: int) -
     # `max_tokens`, `default_request_timeout`). The 0.x names that most tutorials
     # use — `model_name`, `max_tokens_to_sample` — are not the same fields here.
     #
-    # temperature=0 throughout. Not because it makes generation deterministic —
-    # it does not — but because a metric recorded under sampling varies run to
-    # run for reasons unrelated to any change being measured.
+    # temperature=0 where the model still accepts it. Not because it makes
+    # generation deterministic — it does not — but because a metric recorded
+    # under sampling varies run to run for reasons unrelated to any change being
+    # measured. Where the model rejects it, the parameter is omitted entirely:
+    # langchain only sends it when set, so `None` is the correct absence.
     return ChatAnthropic(
         model=name,
         anthropic_api_key=settings.anthropic_api_key,
-        temperature=temperature,
+        temperature=None if name in TEMPERATURE_UNSUPPORTED else temperature,
         max_tokens=max_tokens,
         default_request_timeout=60.0,
     )

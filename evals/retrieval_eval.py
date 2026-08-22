@@ -249,6 +249,11 @@ def build_row(
 
 
 def main() -> int:
+    # cp1252 on the Windows console cannot encode the em dash in the header, let
+    # alone Polish diacritics.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--leg", choices=["hybrid", "lexical", "dense"], default="hybrid")
     parser.add_argument("--fusion", choices=["rrf", "weighted"], default=None)
