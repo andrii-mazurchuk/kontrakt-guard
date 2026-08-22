@@ -76,6 +76,17 @@ proposed, so that is the ceiling on the whole pipeline. With recall@5 at 85.3%, 
 points are being lost to ranking rather than to retrieval**, which is what a reranker recovers and
 what makes it the next thing worth building.
 
+### Layer 1b — answer quality
+
+The same gold set, but end to end through the LangGraph flow, so this measures what retrieval,
+relevance grading and generation do *together*. Every figure compares **article IDs** — none of it
+asks a model whether an answer reads well, which keeps failures attributable: Layer 1 says whether
+the right article was retrieved, this says whether the answer was built out of it.
+
+<!-- METRICS:ANSWERS:START -->
+_No eval runs recorded yet._
+<!-- METRICS:ANSWERS:END -->
+
 ### Layer 2 — audit quality
 
 Precision / recall / F1 on violation detection, over a synthetic labeled contract set built by

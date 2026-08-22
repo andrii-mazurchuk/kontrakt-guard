@@ -74,10 +74,21 @@ class SearchQuery(BaseModel):
 
 
 class Grade(BaseModel):
-    """One chunk's relevance verdict."""
+    """One chunk's relevance verdict.
+
+    `relevant` is declared first on purpose: structured output is generated in
+    field order, so the verdict is emitted before the justification. The prose is
+    therefore diagnostic rather than reasoning the decision depends on — which is
+    what makes it safe to keep short.
+
+    And it needs to be short. Asked merely for a "krótkie uzasadnienie" the model
+    wrote a considered paragraph, and at ten grades per question that made
+    grading output the largest single line in the bill — larger than the Sonnet
+    answer the grading exists to protect.
+    """
 
     relevant: bool = Field(description="Czy fragment jest przydatny do odpowiedzi.")
-    reason: str = Field(default="", description="Krótkie uzasadnienie.")
+    reason: str = Field(default="", description="Uzasadnienie, maksymalnie 12 słów.")
 
 
 class Citation(BaseModel):

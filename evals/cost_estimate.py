@@ -50,12 +50,17 @@ CHARS_PER_TOKEN = 2.2
 # prompt strings, and charged on every one of the ~12 calls a question makes.
 STRUCTURED_OUTPUT_OVERHEAD = 450
 
-# Output tokens per call, also calibrated against the measured run rather than
-# assumed. Grading was the surprise: the schema asks for a "krótkie uzasadnienie"
-# and the model writes a considered paragraph, so grading output ran nearly three
-# times the first guess of 60. With ten grades per question that is the single
-# largest line in the bill — larger than the Sonnet answer it protects.
-OUTPUT_TOKENS = {"rewrite": 40, "grade": 170, "answer": 500}
+# Output tokens per call, calibrated against measured runs rather than assumed.
+#
+# Grading was the surprise twice over. Asked for a "krótkie uzasadnienie" it
+# wrote paragraphs — 170 tokens a call, which at ten grades per question made
+# grading output the largest line in the bill. Capping the justification at
+# twelve words cut that to ~85 and total output by 40%.
+#
+# It cut the *bill* by only 8.7%, which is the more useful lesson: this pipeline
+# is input-bound. Ten grading calls each re-send the system prompt and a full
+# article, so prompt size dominates and trimming generations barely registers.
+OUTPUT_TOKENS = {"rewrite": 40, "grade": 85, "answer": 500}
 
 
 def tokens(text: str) -> int:

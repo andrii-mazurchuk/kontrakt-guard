@@ -54,6 +54,12 @@ from kontrakt_guard.config import Settings, get_settings
 CONCURRENCY = 4
 
 
+# If more than this share of questions fail outright, the run is treated as
+# broken rather than scored. A metric computed only from the questions that
+# happened to succeed carries a survivorship bias invisible in the number.
+MAX_FAILURE_RATE = 0.05
+
+
 @dataclass
 class Outcome:
     """One question's result, reduced to what the metrics need."""
@@ -125,10 +131,32 @@ def run_one(
 
 def score(
     questions: Sequence[GoldQuestion], embedder: Embedder, settings: Settings, usage: Usage
-) -> Report:
+) -> tuple[Report, list[tuple[str, str]]]:
+    """Run every question, surviving individual failures.
+
+    An exception used to abort the whole run and discard every completed
+    question — which on a billable eval means throwing away work already paid
+    for. The first full-set attempt died on question ~90 when the API credit ran
+    out, taking the other 89 results with it and leaving not even a usage total
+    to say what had been spent.
+
+    Failures are collected instead, and `main` refuses to score a run where too
+    many of them occurred.
+    """
+    failures: list[tuple[str, str]] = []
+
+    def attempt(question: GoldQuestion) -> Outcome | None:
+        try:
+            return run_one(question, embedder, settings, usage)
+        # Broad on purpose: any failure costs one question, never the run.
+        except Exception as exc:
+            failures.append((question.id, f"{type(exc).__name__}: {exc}"))
+            return None
+
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-        outcomes = list(pool.map(lambda q: run_one(q, embedder, settings, usage), questions))
-    return Report(outcomes=outcomes)
+        results = list(pool.map(attempt, questions))
+
+    return Report(outcomes=[o for o in results if o is not None]), failures
 
 
 def build_row(
@@ -178,8 +206,29 @@ def main() -> int:
     embedder = Embedder(settings)
 
     started = time.monotonic()
-    report = score(selected, embedder, settings, usage)
+    report, failures = score(selected, embedder, settings, usage)
     duration = time.monotonic() - started
+
+    if failures:
+        print(f"{len(failures)} of {len(selected)} questions failed:", file=sys.stderr)
+        for question_id, error in failures[:5]:
+            print(f"  {question_id}: {error}", file=sys.stderr)
+        # Always report the spend, even on a broken run. The run that provoked
+        # this had already spent real money and reported nothing at all.
+        print(f"\nspent before failing: {usage.summary()}", file=sys.stderr)
+
+        if len(failures) / len(selected) > MAX_FAILURE_RATE:
+            print(
+                f"\nrefusing to score: more than {MAX_FAILURE_RATE:.0%} of questions failed, "
+                "so any metric would be computed from the survivors only.",
+                file=sys.stderr,
+            )
+            return 1
+
+    if not report.outcomes:
+        print("no question completed", file=sys.stderr)
+        return 1
+
     metrics = report.metrics()
 
     print(f"Layer 1b — answers, {metrics.n_questions} gold questions\n")

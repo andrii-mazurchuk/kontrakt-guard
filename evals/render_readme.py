@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from evals.schema import (
+    AnswerMetrics,
     AuditMetrics,
     MetricsRow,
     RetrievalMetrics,
@@ -64,6 +65,34 @@ def render_layer1(row: MetricsRow | None) -> str:
     return "\n".join([header, sep, body]) + "".join(extra) + "\n" + _provenance(row)
 
 
+def render_answers(row: MetricsRow | None) -> str:
+    if row is None or not isinstance(row.metrics, AnswerMetrics):
+        return EMPTY
+    m = row.metrics
+
+    lines = [
+        "| Measure | Value |",
+        "|---|---|",
+        f"| Citation precision | {m.citation_precision:.1%} |",
+        f"| Citation recall | {m.citation_recall:.1%} |",
+        f"| **Citation F1** | **{m.citation_f1:.3f}** |",
+        f"| False refusals | {m.refusal_rate:.1%} |",
+        f"| Hallucinated citations | {m.hallucinated_citation_rate:.1%} |",
+        f"| Uncited answers | {m.uncited_answer_rate:.1%} |",
+    ]
+
+    # The last three rows are failure rates and the direction is not obvious from
+    # the name, so it is stated rather than left for the reader to infer.
+    note = (
+        f"\nEnd to end through the graph over **{m.n_questions}** gold questions. "
+        "The last three rows are failure rates — lower is better. A refusal here is "
+        "a *false* refusal, since every gold question is answerable from the corpus "
+        "by construction; without that row the refusal guardrail could be made "
+        "perfect by refusing everything.\n"
+    )
+    return "\n".join(lines) + note + _provenance(row)
+
+
 def render_layer2(row: MetricsRow | None) -> str:
     if row is None or not isinstance(row.metrics, AuditMetrics):
         return EMPTY
@@ -99,6 +128,7 @@ def _splice(text: str, marker: str, body: str) -> str:
 def render(readme: str, rows: list[MetricsRow] | None = None) -> str:
     rows = load_history() if rows is None else rows
     readme = _splice(readme, "LAYER1", render_layer1(latest_for_layer(rows, "retrieval")))
+    readme = _splice(readme, "ANSWERS", render_answers(latest_for_layer(rows, "answers")))
     return _splice(readme, "LAYER2", render_layer2(latest_for_layer(rows, "audit")))
 
 
