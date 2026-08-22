@@ -121,10 +121,7 @@ def test_ungrounded_question_refuses_instead_of_answering():
     """
     strong = ScriptedModel(parsed(Answer(answer="wymyślona odpowiedź", citations=[])))
     flow = make_flow(
-        cheap=ScriptedModel(
-            parsed(SearchQuery(query="okres próbny")),
-            parsed(Grade(relevant=False, reason="inna instytucja")),
-        ),
+        cheap=ScriptedModel(parsed(Grade(relevant=False, reason="inna instytucja"))),
         strong=strong,
         hits=[hit()],
     )
@@ -140,10 +137,9 @@ def test_ungrounded_question_refuses_instead_of_answering():
 
 def test_grounded_question_reaches_the_answer_node():
     flow = make_flow(
-        cheap=ScriptedModel(
-            parsed(SearchQuery(query="okres próbny umowa o pracę")),
-            parsed(Grade(relevant=True)),
-        ),
+        # No rewrite response queued: with query_rewrite off the understand node
+        # passes the question straight through and never calls the model.
+        cheap=ScriptedModel(parsed(Grade(relevant=True))),
         strong=ScriptedModel(
             parsed(
                 Answer(
@@ -160,7 +156,7 @@ def test_grounded_question_reaches_the_answer_node():
 
     assert state["refused"] is False
     assert [c.article for c in state["citations"]] == ["25"]
-    assert state["search_query"] == "okres próbny umowa o pracę"
+    assert state["search_query"] == "czy 6-miesięczny okres próbny jest legalny?"
 
 
 # --- grounding is checked, not requested --------------------------------------
@@ -288,14 +284,14 @@ def test_an_unpriced_model_is_charged_at_the_most_expensive_rate():
 
 def test_usage_accumulates_across_the_whole_run():
     flow = make_flow(
-        cheap=ScriptedModel(parsed(SearchQuery(query="q")), parsed(Grade(relevant=True))),
+        cheap=ScriptedModel(parsed(Grade(relevant=True))),
         strong=ScriptedModel(parsed(Answer(answer="a", citations=[]), model="claude-sonnet-5")),
         hits=[hit("25"), hit("26")],
     )
     build_qa_graph(flow).invoke({"question": "pytanie"})
 
-    # rewrite + one grade per chunk + answer
-    assert flow.usage.calls == 4
+    # One grade per chunk, plus the answer. No rewrite call: it is off by default.
+    assert flow.usage.calls == 3
     assert flow.usage.cost_usd > 0
     assert flow.usage.per_model["claude-sonnet-5"] == 1
 
@@ -326,3 +322,72 @@ def test_rewrite_question_falls_back_when_the_call_fails():
     model = ScriptedModel({"parsed": None, "raw": ai(), "parsing_error": "boom"})
 
     assert rewrite_question(cast(BaseChatModel, model), "pytanie", usage) == "pytanie"
+
+
+# --- citation canonicalisation ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "act,article",
+    [
+        ("kp", "25"),
+        ("Kodeks pracy", "25 § 2"),
+        ("KP", "art. 25"),
+        ("k.p.", "25"),
+    ],
+)
+def test_a_grounded_citation_is_recognised_however_it_is_spelled(act, article):
+    """Found by the first live call, which cost the run its entire citation list.
+
+    The model answered correctly, cited `Kodeks pracy art. 25 § 2`, and the
+    verifier — comparing raw strings against a corpus keyed ("kp", "25") —
+    reported every citation as unsupported. Strictness was right; the comparison
+    was not.
+    """
+    supported, unsupported = _verify_citations([Citation(act=act, article=article)], [hit("25")])
+
+    assert unsupported == []
+    # Returned canonically, so a caller never sees the model's spelling.
+    assert (supported[0].act, supported[0].article) == ("kp", "25")
+
+
+def test_normalising_does_not_soften_the_guardrail():
+    """The point of the check survives: an unretrieved article is still caught."""
+    _, unsupported = _verify_citations(
+        [Citation(act="Kodeks pracy", article="999 § 1")], [hit("25")]
+    )
+    assert unsupported == ["Kodeks pracy 999 § 1"]
+
+
+def test_passages_carry_the_corpus_key_the_model_must_copy():
+    strong = ScriptedModel(parsed(Answer(answer="…", citations=[]), model="claude-sonnet-5"))
+    make_flow(strong=strong).answer(QAState(question="pytanie", graded=[hit("29^3")]))
+
+    assert "[kp:29^3]" in strong.calls[0][1].content
+
+
+def test_the_rewrite_is_off_by_default_and_the_node_passes_through():
+    """Measured: rewriting cost 8 points of recall@5 on the gold set (ADR 0009).
+
+    The node stays in the graph — the finding is worth keeping visible, and the
+    setting keeps it reproducible — but it must not call the model when off.
+    """
+    cheap = ScriptedModel(parsed(SearchQuery(query="cokolwiek")))
+    flow = make_flow(cheap=cheap)
+    assert flow.settings.query_rewrite is False
+
+    result = flow.understand(QAState(question="szef nie płaci za nadgodziny"))
+
+    assert result["search_query"] == "szef nie płaci za nadgodziny"
+    assert cheap.calls == []
+
+
+def test_the_rewrite_still_runs_when_switched_on():
+    cheap = ScriptedModel(parsed(SearchQuery(query="praca w godzinach nadliczbowych")))
+    flow = make_flow(cheap=cheap)
+    flow.settings = Settings(query_rewrite=True)
+
+    result = flow.understand(QAState(question="szef nie płaci za nadgodziny"))
+
+    assert result["search_query"] == "praca w godzinach nadliczbowych"
+    assert len(cheap.calls) == 1

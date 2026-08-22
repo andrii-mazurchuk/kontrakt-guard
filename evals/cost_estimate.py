@@ -34,19 +34,33 @@ from ingestion.embed import Embedder
 from kontrakt_guard.config import get_settings
 from retrieval.search import dense_search, lexical_search, merge
 
-# Characters per token, Polish, Claude tokenizer. Deliberately low: Polish
-# tokenizes worse than English (diacritics and long inflected forms split more
-# often), and an estimate that comes in under the real bill is the one failure
-# mode that matters for a number used to ask permission to spend.
-CHARS_PER_TOKEN = 3.0
+# Characters per token, Polish, Claude tokenizer. Both constants below were
+# calibrated against a measured 10-question run of `evals.qa_eval`, because the
+# first version of this estimator — 3.0 chars per token and no per-call overhead
+# — came in **77% under** the real bill. An estimator that under-predicts is
+# worse than no estimator, since its only job is to be the number someone is
+# asked to approve.
+#
+# 2.2 rather than 3.0: Polish tokenises worse than English. Diacritics and long
+# inflected forms split more often, and the corpus is full of both.
+CHARS_PER_TOKEN = 2.2
 
-# Output is short and bounded by the schemas: a search phrase, a boolean plus a
-# clause of reasoning, an answer of a few sentences with citations.
-OUTPUT_TOKENS = {"rewrite": 40, "grade": 60, "answer": 450}
+# What `with_structured_output` costs beyond the prompt itself. Every call ships
+# the schema as a tool definition, plus the message envelope — invisible in the
+# prompt strings, and charged on every one of the ~12 calls a question makes.
+STRUCTURED_OUTPUT_OVERHEAD = 450
+
+# Output tokens per call, also calibrated against the measured run rather than
+# assumed. Grading was the surprise: the schema asks for a "krótkie uzasadnienie"
+# and the model writes a considered paragraph, so grading output ran nearly three
+# times the first guess of 60. With ten grades per question that is the single
+# largest line in the bill — larger than the Sonnet answer it protects.
+OUTPUT_TOKENS = {"rewrite": 40, "grade": 170, "answer": 500}
 
 
 def tokens(text: str) -> int:
-    return int(len(text) / CHARS_PER_TOKEN)
+    """Prompt tokens for one call, including what the API adds to it."""
+    return int(len(text) / CHARS_PER_TOKEN) + STRUCTURED_OUTPUT_OVERHEAD
 
 
 def main() -> int:
@@ -69,9 +83,11 @@ def main() -> int:
         for question in measured:
             text = question.question
 
-            # understand — the rewrite sees only the question.
-            cheap_in += tokens(REWRITE_SYSTEM + text)
-            cheap_out += OUTPUT_TOKENS["rewrite"]
+            # understand — only billable when the rewrite is switched on, which
+            # it is not by default: it cost 8 points of recall@5. See ADR 0009.
+            if settings.query_rewrite:
+                cheap_in += tokens(REWRITE_SYSTEM + text)
+                cheap_out += OUTPUT_TOKENS["rewrite"]
 
             # retrieve — free, and run for real so the chunk sizes below are the
             # sizes this corpus actually produces rather than an assumed average.
@@ -116,15 +132,16 @@ def main() -> int:
     strong_cost = (strong_in * strong_rate_in + strong_out * strong_rate_out) / 1_000_000
     total = (cheap_cost + strong_cost) * scale
 
-    calls = (len(measured) * 2 + grade_calls) * scale
+    per_question_fixed = 2 if settings.query_rewrite else 1
+    calls = (len(measured) * per_question_fixed + grade_calls) * scale
     print(f"Measured {len(measured)} of {len(questions)} gold questions.\n")
-    print(f"{'step':<12}{'model':<28}{'in':>12}{'out':>10}{'USD':>10}")
+    print(f"{'step':<14}{'model':<28}{'in':>12}{'out':>10}{'USD':>10}")
     print(
-        f"{'rewrite+grade':<12}{settings.model_cheap:<28}"
+        f"{'rewrite+grade':<14}{settings.model_cheap:<28}"
         f"{int(cheap_in * scale):>12,}{int(cheap_out * scale):>10,}{cheap_cost * scale:>10.3f}"
     )
     print(
-        f"{'answer':<12}{settings.model_strong:<28}"
+        f"{'answer':<14}{settings.model_strong:<28}"
         f"{int(strong_in * scale):>12,}{int(strong_out * scale):>10,}{strong_cost * scale:>10.3f}"
     )
     print(f"\n{int(calls):,} API calls, estimated **${total:.2f}** for the full gold set.")

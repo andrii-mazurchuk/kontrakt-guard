@@ -37,6 +37,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
+from evals.gold import normalise_article
 from graphs.llm import Usage, cheap_model, strong_model
 from graphs.prompts import (
     ANSWER_SYSTEM,
@@ -80,8 +81,22 @@ class Grade(BaseModel):
 
 
 class Citation(BaseModel):
-    act: str
-    article: str
+    """One cited article, in the corpus's own identifier format.
+
+    The field descriptions are load-bearing. On the first live run the model
+    answered correctly and cited `act="Kodeks pracy", article="25 § 2"` against a
+    corpus keyed `("kp", "25")` — so a perfectly grounded answer had every one of
+    its citations reported as unsupported. Passages now carry an explicit
+    `[kp:25]` tag and these fields ask for it verbatim.
+    """
+
+    act: str = Field(description='Kod aktu dokładnie tak, jak w nawiasie, np. "kp".')
+    article: str = Field(
+        description=(
+            'Numer artykułu dokładnie tak, jak w nawiasie, np. "25" albo "29^3". '
+            "Bez słowa „art.” i bez numeru paragrafu."
+        )
+    )
 
 
 class Answer(BaseModel):
@@ -156,12 +171,23 @@ class QAFlow:
     # -- understand ------------------------------------------------------------
 
     def understand(self, state: QAState) -> QAState:
-        """Rewrite a colloquial question into statutory Polish.
+        """Restate the question in statutory Polish — when that helps.
 
-        A retrieval change, so its value is settled by recall@k rather than by
-        reading the rewrites and finding them plausible.
+        Off by default, and the node stays in the graph anyway because the
+        finding is the interesting part: measured on the gold set, rewriting cost
+        8 points of recall@5 and lowered candidate-pool recall, so it was
+        discarding search terms rather than translating register. The gold set is
+        already formally worded, so this bounds the claim rather than settling it
+        for colloquial input. See ADR 0009.
+
+        A retrieval change, settled by recall@k rather than by reading the
+        rewrites and finding them plausible — which is exactly what they look
+        like when read.
         """
-        return {"search_query": rewrite_question(self._cheap, state["question"], self.usage)}
+        question = state["question"]
+        if not self.settings.query_rewrite:
+            return {"search_query": question}
+        return {"search_query": rewrite_question(self._cheap, question, self.usage)}
 
     # -- retrieve --------------------------------------------------------------
 
@@ -242,9 +268,12 @@ class QAFlow:
 
     def answer(self, state: QAState) -> QAState:
         graded = state["graded"]
+        # The `[act:article]` tag is the corpus's own key, shown verbatim so the
+        # model has the exact string the citation check will compare against
+        # rather than having to guess the format from the display citation.
         passages = [
-            f"{hit.citation}"
-            + (f" [{' > '.join(hit.title_path)}]" if hit.title_path else "")
+            f"[{hit.act}:{hit.article}] {hit.citation}"
+            + (f" ({' > '.join(hit.title_path)})" if hit.title_path else "")
             + (" [PRZEPIS UCHYLONY]" if hit.repealed else "")
             + f"\n{hit.content}"
             for hit in graded
@@ -350,10 +379,39 @@ def _verify_citations(
     plausible sentence carrying a real-looking article number is worse than a
     refusal and worse than an obvious error.
     """
-    available = {(hit.act, hit.article) for hit in graded}
-    supported = [c for c in citations if (c.act, c.article) in available]
-    unsupported = [f"{c.act} {c.article}" for c in citations if (c.act, c.article) not in available]
+    available = {(hit.act.lower(), normalise_article(hit.article)) for hit in graded}
+
+    supported: list[Citation] = []
+    unsupported: list[str] = []
+    for citation in citations:
+        key = (_normalise_act(citation.act), _cited_article_key(citation.article))
+        if key in available:
+            # Returned in canonical form, so a caller always receives the
+            # corpus's identifier rather than however the model spelled it.
+            supported.append(Citation(act=key[0], article=key[1]))
+        else:
+            unsupported.append(f"{citation.act} {citation.article}")
     return supported, unsupported
+
+
+# The prompt asks for "kp" and the model usually complies, but it also knows the
+# act by name. Aliasing is cheaper than reporting a correct citation as invented.
+_ACT_ALIASES = {"kodeks pracy": "kp", "kodeksu pracy": "kp", "k.p.": "kp"}
+
+
+def _normalise_act(act: str) -> str:
+    return _ACT_ALIASES.get(act.strip().lower(), act.strip().lower())
+
+
+def _cited_article_key(article: str) -> str:
+    """Reduce a cited reference to the corpus's article key.
+
+    The paragraph is dropped: chunks are keyed by article, so "25 § 2" and "25"
+    are the same row as far as grounding goes. Delegating to the gold set's
+    `normalise_article` means a citation and a ground-truth id are canonicalised
+    by one implementation rather than by two that can drift apart.
+    """
+    return normalise_article(article.split("§")[0])
 
 
 # --- graph --------------------------------------------------------------------
@@ -408,6 +466,12 @@ def ask(
 
 
 def main() -> int:
+    # The Windows console defaults to cp1252, which cannot encode "ż" — so every
+    # answer this command exists to print would die at the print, after the API
+    # call had already been paid for.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question", help="Pytanie po polsku.")
     parser.add_argument("--show-rejected", action="store_true", help="Print graded-out chunks.")
