@@ -61,6 +61,46 @@ class RetrievalMetrics(BaseModel):
     misses_at_5: list[str] = Field(default_factory=list)
 
 
+class AnswerMetrics(BaseModel):
+    """Layer 1b — does the Q&A graph answer from the articles it was given?
+
+    Scored against the same gold set as retrieval, but end to end through the
+    graph, so it measures what retrieval, grading and generation do *together*.
+    Every figure here is computed by comparing article ids, not by asking a model
+    to judge prose: an LLM judge is a second opinion worth having later, and a
+    poor substitute for a check that can simply be computed.
+    """
+
+    layer: Literal["answers"] = "answers"
+
+    n_questions: int = Field(gt=0)
+
+    # Every gold question is answerable from the corpus by construction, so a
+    # refusal here is a *false* refusal. The guardrail is only valuable while
+    # this stays low; a system that refuses everything is trivially faithful.
+    refusal_rate: float = Field(ge=0.0, le=1.0)
+
+    # Cited articles against ground-truth articles.
+    citation_precision: float = Field(ge=0.0, le=1.0)
+    citation_recall: float = Field(ge=0.0, le=1.0)
+    citation_f1: float = Field(ge=0.0, le=1.0)
+
+    # How often generation reached for an article that was never retrieved. The
+    # verifier strips these before anyone sees them, so this is the rate at which
+    # the guardrail actually fires rather than the rate at which it fails.
+    hallucinated_citation_rate: float = Field(
+        ge=0.0, le=1.0, description="Share of answers citing at least one unretrieved article."
+    )
+
+    # An answer with no citation is ungrounded even when it is correct, and the
+    # brief makes citations mandatory rather than encouraged.
+    uncited_answer_rate: float = Field(ge=0.0, le=1.0)
+
+    false_refusals: list[str] = Field(
+        default_factory=list, description="Gold question ids the graph refused to answer."
+    )
+
+
 class AuditMetrics(BaseModel):
     """Layer 2 — does the auditor find the violations that were planted?"""
 
@@ -80,7 +120,9 @@ class AuditMetrics(BaseModel):
     )
 
 
-Metrics = Annotated[RetrievalMetrics | AuditMetrics, Field(discriminator="layer")]
+Metrics = Annotated[RetrievalMetrics | AnswerMetrics | AuditMetrics, Field(discriminator="layer")]
+
+Layer = Literal["retrieval", "answers", "audit"]
 
 
 class MetricsRow(BaseModel):
@@ -107,9 +149,7 @@ def load_history(path: Path = HISTORY_PATH) -> list[MetricsRow]:
     return rows
 
 
-def latest_for_layer(
-    rows: list[MetricsRow], layer: Literal["retrieval", "audit"]
-) -> MetricsRow | None:
+def latest_for_layer(rows: list[MetricsRow], layer: Layer) -> MetricsRow | None:
     """Most recent run for a layer, or None if that layer has never run."""
     for row in reversed(rows):
         if row.metrics.layer == layer:

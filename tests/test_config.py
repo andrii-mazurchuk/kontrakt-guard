@@ -40,6 +40,7 @@ def test_config_hash_tracks_the_lexical_ranking_function():
     )
     assert base.retrieval_config_hash() != Settings(bm25_k1=2.0).retrieval_config_hash()
     assert base.retrieval_config_hash() != Settings(bm25_b=0.4).retrieval_config_hash()
+    assert base.retrieval_config_hash() != Settings(query_rewrite=True).retrieval_config_hash()
 
 
 def test_defaults_match_the_measured_best_configuration():
@@ -48,6 +49,8 @@ def test_defaults_match_the_measured_best_configuration():
     assert settings.fusion == "weighted"
     assert settings.lexical_ranking == "bm25"
     assert settings.hybrid_alpha == 0.8
+    # Rewriting cost 8 points of recall@5 on the gold set. See ADR 0009.
+    assert settings.query_rewrite is False
 
 
 def test_config_hash_ignores_where_the_corpus_happens_to_live():

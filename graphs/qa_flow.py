@@ -171,12 +171,23 @@ class QAFlow:
     # -- understand ------------------------------------------------------------
 
     def understand(self, state: QAState) -> QAState:
-        """Rewrite a colloquial question into statutory Polish.
+        """Restate the question in statutory Polish — when that helps.
 
-        A retrieval change, so its value is settled by recall@k rather than by
-        reading the rewrites and finding them plausible.
+        Off by default, and the node stays in the graph anyway because the
+        finding is the interesting part: measured on the gold set, rewriting cost
+        8 points of recall@5 and lowered candidate-pool recall, so it was
+        discarding search terms rather than translating register. The gold set is
+        already formally worded, so this bounds the claim rather than settling it
+        for colloquial input. See ADR 0009.
+
+        A retrieval change, settled by recall@k rather than by reading the
+        rewrites and finding them plausible — which is exactly what they look
+        like when read.
         """
-        return {"search_query": rewrite_question(self._cheap, state["question"], self.usage)}
+        question = state["question"]
+        if not self.settings.query_rewrite:
+            return {"search_query": question}
+        return {"search_query": rewrite_question(self._cheap, question, self.usage)}
 
     # -- retrieve --------------------------------------------------------------
 

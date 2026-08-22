@@ -17,9 +17,15 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Literal
 
-from evals.schema import AuditMetrics, MetricsRow, RetrievalMetrics, load_history
+from evals.schema import (
+    AnswerMetrics,
+    AuditMetrics,
+    Layer,
+    MetricsRow,
+    RetrievalMetrics,
+    load_history,
+)
 
 # How far a metric may fall before the build fails. Small drops are noise from
 # LLM non-determinism; a 3-point drop is a real regression worth blocking on.
@@ -54,14 +60,24 @@ def _tracked(row: MetricsRow) -> dict[str, float]:
         if m.faithfulness is not None:
             tracked["faithfulness"] = m.faithfulness
         return tracked
+    if isinstance(m, AnswerMetrics):
+        # Refusal and hallucination are defects, so they are negated: the gate
+        # only understands "higher is better", and a rising false-refusal rate
+        # must read as a regression rather than as an improvement.
+        return {
+            "citation_f1": m.citation_f1,
+            "citation_precision": m.citation_precision,
+            "citation_recall": m.citation_recall,
+            "not_refused": 1.0 - m.refusal_rate,
+            "not_hallucinated": 1.0 - m.hallucinated_citation_rate,
+            "cited": 1.0 - m.uncited_answer_rate,
+        }
     if isinstance(m, AuditMetrics):
         return {"precision": m.precision, "recall": m.recall, "f1": m.f1}
     raise TypeError(f"unhandled metrics type: {type(m)!r}")
 
 
-def check(
-    layer: Literal["retrieval", "audit"], history: list[MetricsRow] | None = None
-) -> tuple[bool, list[str]]:
+def check(layer: Layer, history: list[MetricsRow] | None = None) -> tuple[bool, list[str]]:
     """Return (passed, human-readable report lines)."""
     history = load_history() if history is None else history
     rows = [r for r in history if r.metrics.layer == layer]
@@ -106,7 +122,7 @@ def check(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--layer", choices=["retrieval", "audit"], required=True)
+    parser.add_argument("--layer", choices=["retrieval", "answers", "audit"], required=True)
     args = parser.parse_args()
 
     passed, lines = check(args.layer)

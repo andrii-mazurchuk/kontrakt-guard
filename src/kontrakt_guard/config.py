@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     # lexical leg is far weaker than the dense one (recall@5 of 46.9% against
     # 80.2%), so equal weighting injected noise into the top ranks and made hybrid
     # retrieval *worse* than dense alone. See ADR 0003.
+    # Whether the Q&A graph rewrites a question into statutory Polish before
+    # searching. Off, by measurement: on the gold set it cost 8 points of
+    # recall@5 (85.3% -> 77.3%) and 11.8 at k=3, and even lowered candidate-pool
+    # recall, meaning it removed correct articles from consideration entirely.
+    #
+    # The caveat matters as much as the number. The gold set is PIP guidance and
+    # statute text, so its questions are *already* formal — the rewrite has no
+    # register gap to close there and can only discard terms. It may still earn
+    # its place on genuinely colloquial input, which this gold set does not
+    # contain and therefore cannot settle. See ADR 0009.
+    query_rewrite: bool = False
+
     # How the lexical leg scores a match. Postgres's ts_rank_cd has no inverse
     # document frequency term, so lexemes present in most of the corpus ranked as
     # strongly as distinguishing ones — on a corpus of employment law, that means
@@ -104,6 +116,7 @@ class Settings(BaseSettings):
             "retrieval_top_k": self.retrieval_top_k,
             "bm25_candidates": self.bm25_candidates,
             "vector_candidates": self.vector_candidates,
+            "query_rewrite": self.query_rewrite,
             "lexical_ranking": self.lexical_ranking,
             "bm25_k1": self.bm25_k1,
             "bm25_b": self.bm25_b,
