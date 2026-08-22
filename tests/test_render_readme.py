@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from evals.render_readme import render, render_layer1, render_layer2
+from evals.render_readme import EMPTY, render, render_answers, render_layer1, render_layer2
 
 TEMPLATE = """# Title
 
@@ -12,6 +12,10 @@ _No eval runs recorded yet._
 
 middle
 
+<!-- METRICS:ANSWERS:START -->
+_No eval runs recorded yet._
+<!-- METRICS:ANSWERS:END -->
+
 <!-- METRICS:LAYER2:START -->
 _No eval runs recorded yet._
 <!-- METRICS:LAYER2:END -->
@@ -20,7 +24,8 @@ _No eval runs recorded yet._
 
 def test_empty_history_renders_placeholders():
     out = render(TEMPLATE, rows=[])
-    assert out.count("_No eval runs recorded yet._") == 2
+    # One placeholder per layer: retrieval, answers, audit.
+    assert out.count("_No eval runs recorded yet._") == 3
 
 
 def test_layer1_table_reports_the_documented_k_values(retrieval_row):
@@ -66,3 +71,23 @@ def test_provenance_is_always_attached(retrieval_row):
     table = render_layer1(retrieval_row)
     assert "abc123def456" in table  # retrieval config hash
     assert "multilingual-e5-large" in table
+
+
+def test_answers_table_reports_defect_rates_with_their_direction(answer_row):
+    """Precision-style and defect-style rows sit in one table; direction must be stated."""
+    body = render_answers(answer_row)
+
+    assert "| **Citation F1** | **0.755** |" in body
+    assert "| False refusals | 4.0% |" in body
+    assert "lower is better" in body
+    # A refusal on an answerable question is a defect, and the table says so.
+    assert "*false* refusal" in body
+
+
+def test_answers_table_is_empty_before_any_run():
+    assert render_answers(None) == EMPTY
+
+
+def test_answers_table_ignores_a_row_from_another_layer(retrieval_row):
+    """Layer sections must never render each other's numbers."""
+    assert render_answers(retrieval_row) == EMPTY

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from evals.schema import AuditMetrics, MetricsRow, RetrievalMetrics, RunContext
+from evals.schema import AnswerMetrics, AuditMetrics, MetricsRow, RetrievalMetrics, RunContext
 
 
 def make_context(commit: str = "a" * 40, cost: float = 0.12) -> RunContext:
@@ -46,5 +46,22 @@ def audit_row() -> MetricsRow:
             recall=0.70,
             f1=0.746,
             per_violation_type={"probation_too_long": 0.9, "wage_below_minimum": 0.6},
+        ),
+    )
+
+
+@pytest.fixture
+def answer_row() -> MetricsRow:
+    return MetricsRow(
+        context=make_context(commit="d" * 40, cost=1.87),
+        metrics=AnswerMetrics(
+            n_questions=97,
+            refusal_rate=0.04,
+            citation_precision=0.66,
+            citation_recall=0.88,
+            citation_f1=0.755,
+            hallucinated_citation_rate=0.01,
+            uncited_answer_rate=0.02,
+            false_refusals=["kp-002", "pip-011"],
         ),
     )

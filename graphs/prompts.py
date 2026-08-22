@@ -40,7 +40,10 @@ odpowiadając na pytanie — nawet jeśli sam nie wystarcza do pełnej odpowiedz
 Fragment NIE jest przydatny, jeżeli dotyczy innej instytucji prawnej, a jedynie
 używa podobnego słownictwa.
 
-Oceniaj wyłącznie ten jeden fragment. Nie zakładaj, że istnieją inne fragmenty."""
+Oceniaj wyłącznie ten jeden fragment. Nie zakładaj, że istnieją inne fragmenty.
+
+Uzasadnienie podaj w maksymalnie 12 słowach — samo sedno, bez powtarzania treści
+fragmentu i bez wskazywania, którego przepisu brakuje."""
 
 # Answering. Every constraint here exists because its absence is a known failure
 # mode of grounded generation, not because it sounds prudent.
