@@ -46,6 +46,27 @@ uv run python -m evals.render_readme --check   # README tables match the recorde
 uv run python -m evals.gate --layer retrieval  # no regression past tolerance
 ```
 
+### What does not run on a pull request
+
+The retrieval eval itself. It is free of API cost — embeddings and SQL, no LLM call — but it fetches
+the corpus, embeds 543 chunks with a 2.2 GB model and scores 97 questions, which is 8–12 minutes to
+defend a number that only moves when retrieval changes. `evals.yml` runs it nightly and on demand
+(`gh workflow run evals.yml`); run it locally after any retrieval change:
+
+```bash
+docker compose up -d --build --wait db
+uv run python -m ingestion.build --load        # ~10 min, embeds the corpus
+uv run python -m evals.retrieval_eval          # add --record to append a row
+```
+
+The nightly job appends its row on the runner and does not commit it: `main` is protected, and a
+record of results that CI can write to itself is a record nobody has read. The row is uploaded as an
+artifact so a genuine improvement is promoted through a pull request like anything else.
+
+A **checksum mismatch in the fetch step is not a broken build — it means the law changed.** ISAP
+regenerates the consolidated PDF whenever an amendment lands, so re-pinning is deliberate, and the
+new corpus is not comparable to metrics recorded under the old one.
+
 ### Test selection
 
 The default `pytest` run is free and fast: markers `integration` (needs Postgres) and `llm` (makes

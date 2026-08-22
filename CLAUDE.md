@@ -55,6 +55,8 @@ docker compose up                              # postgres+pgvector + API
 
 `.pre-commit-config.yaml` and `.github/workflows/ci.yml` run these identically on purpose. **If you change one, change both** — a hook that disagrees with CI is a hook that lies.
 
+The retrieval eval is *not* a per-PR gate: it needs the corpus loaded and a 2.2 GB model, so `.github/workflows/evals.yml` runs it nightly and on `workflow_dispatch`. Run it locally after any retrieval change and record the row deliberately.
+
 Use `git commit -F <file>` for multi-line messages on this machine; PowerShell mangles here-strings containing double quotes when passing them to native commands.
 
 ## Working agreement (overrides the global planning rules for this repo)

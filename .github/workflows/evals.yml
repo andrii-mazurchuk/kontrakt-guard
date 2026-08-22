@@ -1,0 +1,106 @@
+name: evals
+
+# Layer 1 retrieval quality, run against the real corpus.
+#
+# Deliberately NOT a per-pull-request gate. The eval is free of API cost —
+# embeddings and SQL, no LLM call — but not free of time: it fetches the corpus
+# from ISAP, embeds 543 chunks with a 2.2 GB model and scores 97 questions. On
+# every PR that is 8–12 minutes of feedback latency to defend a number that only
+# moves when retrieval itself changes.
+#
+# The per-PR honesty guarantee lives in ci.yml instead, and is the one that
+# matters: `render_readme --check` fails the build if the README tables drift
+# from metrics/history.jsonl, so a published number can never quietly stop
+# matching its recorded evidence.
+on:
+  schedule:
+    # 03:00 UTC daily. Nothing depends on the hour; it is simply outside the
+    # window where a failure would be mistaken for a broken PR.
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: evals
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  retrieval:
+    name: layer 1 · retrieval recall@k
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "55432"
+      POSTGRES_DB: kontrakt_guard
+      POSTGRES_USER: kontrakt
+      POSTGRES_PASSWORD: kontrakt
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # Keyed on config.py, which is where the model name and its pinned revision
+      # live. Coarser than necessary — an unrelated config edit costs a 2.2 GB
+      # re-download — but it fails in the safe direction: a model change can never
+      # hit a cache holding the previous weights.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ hashFiles('src/kontrakt_guard/config.py') }}
+
+      - name: Start database
+        run: docker compose up -d --build --wait db
+
+      # A checksum mismatch here means **the law changed** — ISAP regenerates the
+      # consolidated PDF whenever an amendment lands. That is a genuine alarm and
+      # should fail loudly: the new corpus is not comparable to metrics recorded
+      # under the old one, so re-pinning is a deliberate act, never automatic.
+      - name: Fetch corpus
+        run: uv run python -m ingestion.fetch
+
+      - name: Build and load corpus
+        run: uv run python -m ingestion.build --load
+
+      # --record appends to the runner's copy of metrics/history.jsonl. The file
+      # is not committed back: main is protected, and a record of results that CI
+      # can write to itself is a record nobody has read. The append exists so the
+      # gate below has a fresh row to compare against main's baseline.
+      - name: Score the gold set
+        run: uv run python -m evals.retrieval_eval --record
+
+      - name: Regression gate
+        run: uv run python -m evals.gate --layer retrieval
+
+      # The row that was not committed. Attach it so a genuine improvement can be
+      # promoted into history.jsonl through a pull request like any other change.
+      - name: Upload metrics row
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-history
+          path: metrics/history.jsonl
+          retention-days: 30
+
+      - name: Database logs on failure
+        if: failure()
+        run: docker compose logs db
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
