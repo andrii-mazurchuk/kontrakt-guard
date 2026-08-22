@@ -28,7 +28,7 @@ from __future__ import annotations
 import argparse
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from typing import Annotated, Literal, TypedDict, TypeVar, cast
+from typing import Annotated, Literal, TypedDict, cast
 
 import psycopg
 from langchain_core.language_models import BaseChatModel
@@ -60,9 +60,6 @@ MAX_PASSAGES = 6
 # Grading is one independent call per chunk, so the wall-clock cost is one call
 # deep rather than `retrieval_top_k` calls deep.
 GRADE_CONCURRENCY = 8
-
-SchemaT = TypeVar("SchemaT", bound=BaseModel)
-
 
 # --- structured outputs -------------------------------------------------------
 # Schema-enforced rather than parsed out of prose: these feed downstream control
@@ -164,16 +161,7 @@ class QAFlow:
         A retrieval change, so its value is settled by recall@k rather than by
         reading the rewrites and finding them plausible.
         """
-        question = state["question"]
-        parsed = self._structured(
-            self._cheap,
-            SearchQuery,
-            [SystemMessage(content=REWRITE_SYSTEM), HumanMessage(content=question)],
-        )
-        # Falling back to the original question rather than failing: a rewrite is
-        # an optimisation, and losing it should degrade retrieval, not the run.
-        query = parsed.query.strip() if parsed else ""
-        return {"search_query": query or question}
+        return {"search_query": rewrite_question(self._cheap, state["question"], self.usage)}
 
     # -- retrieve --------------------------------------------------------------
 
@@ -299,31 +287,56 @@ class QAFlow:
 
     # -- internals -------------------------------------------------------------
 
-    def _structured(
-        self,
-        model: BaseChatModel,
-        schema: type[SchemaT],
-        messages: list[BaseMessage],
+    def _structured[SchemaT: BaseModel](
+        self, model: BaseChatModel, schema: type[SchemaT], messages: list[BaseMessage]
     ) -> SchemaT | None:
-        """One schema-enforced call, with its token usage banked.
+        return structured_call(model, schema, messages, self.usage)
 
-        `include_raw=True` is what makes cost accounting possible at all: the
-        parsed object carries no usage metadata, so without the raw message
-        alongside it there is nothing to bill against. It also converts a
-        validation failure from an exception into a None, which each caller
-        decides how to handle — the answer node refuses, the rewrite node falls
-        back to the original question.
-        """
-        result = model.with_structured_output(schema, include_raw=True).invoke(messages)
-        if not isinstance(result, dict):
-            return None
 
-        raw = result.get("raw")
-        if isinstance(raw, AIMessage):
-            self.usage.record(raw, str(raw.response_metadata.get("model_name") or ""))
+def structured_call[SchemaT: BaseModel](
+    model: BaseChatModel,
+    schema: type[SchemaT],
+    messages: list[BaseMessage],
+    usage: Usage,
+) -> SchemaT | None:
+    """One schema-enforced call, with its token usage banked.
 
-        parsed = result.get("parsed")
-        return parsed if isinstance(parsed, schema) else None
+    `include_raw=True` is what makes cost accounting possible at all: the parsed
+    object carries no usage metadata, so without the raw message alongside it
+    there is nothing to bill against. It also converts a validation failure from
+    an exception into a None, which each caller decides how to handle — the
+    answer node refuses, the rewrite node falls back to the original question.
+    """
+    result = model.with_structured_output(schema, include_raw=True).invoke(messages)
+    if not isinstance(result, dict):
+        return None
+
+    raw = result.get("raw")
+    if isinstance(raw, AIMessage):
+        usage.record(raw, str(raw.response_metadata.get("model_name") or ""))
+
+    parsed = result.get("parsed")
+    return parsed if isinstance(parsed, schema) else None
+
+
+def rewrite_question(model: BaseChatModel, question: str, usage: Usage) -> str:
+    """Restate a question in the register the statute uses.
+
+    Standalone rather than only a method, because a query rewrite is a
+    *retrieval* change and `evals.retrieval_eval --rewrite` scores it with the
+    same harness that scored fusion and BM25. Measuring it any other way would
+    make it the one retrieval decision in this repository settled by reading the
+    output and finding it plausible.
+    """
+    parsed = structured_call(
+        model,
+        SearchQuery,
+        [SystemMessage(content=REWRITE_SYSTEM), HumanMessage(content=question)],
+        usage,
+    )
+    # Falling back to the original question rather than failing: a rewrite is an
+    # optimisation, and losing it should degrade retrieval, not the run.
+    return (parsed.query.strip() if parsed else "") or question
 
 
 def _verify_citations(

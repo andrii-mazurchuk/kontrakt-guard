@@ -8,9 +8,10 @@ faithfulness judge's job, and neither belongs in a unit test.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 
 from graphs.llm import PRICES, Usage
@@ -23,6 +24,7 @@ from graphs.qa_flow import (
     SearchQuery,
     _verify_citations,
     build_qa_graph,
+    rewrite_question,
     route_after_grading,
 )
 from kontrakt_guard.config import Settings
@@ -296,3 +298,31 @@ def test_usage_accumulates_across_the_whole_run():
     assert flow.usage.calls == 4
     assert flow.usage.cost_usd > 0
     assert flow.usage.per_model["claude-sonnet-5"] == 1
+
+
+# --- the rewrite, as the eval harness uses it ---------------------------------
+
+
+def test_rewrite_question_is_usable_without_the_whole_flow():
+    """`evals.retrieval_eval --rewrite` scores this node with the Layer 1 harness.
+
+    A query rewrite is a retrieval change, so it is settled by recall@k like
+    every other retrieval decision here — not by reading the rewrites and
+    finding them plausible.
+    """
+    usage = Usage()
+    model = ScriptedModel(parsed(SearchQuery(query="praca w godzinach nadliczbowych")))
+
+    result = rewrite_question(
+        cast(BaseChatModel, model), "szef każe mi zostawać po godzinach", usage
+    )
+
+    assert result == "praca w godzinach nadliczbowych"
+    assert usage.calls == 1
+
+
+def test_rewrite_question_falls_back_when_the_call_fails():
+    usage = Usage()
+    model = ScriptedModel({"parsed": None, "raw": ai(), "parsing_error": "boom"})
+
+    assert rewrite_question(cast(BaseChatModel, model), "pytanie", usage) == "pytanie"
