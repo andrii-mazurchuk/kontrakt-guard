@@ -15,7 +15,7 @@ def test_config_hash_is_stable_across_instances():
 
 def test_config_hash_tracks_retrieval_affecting_settings():
     base = Settings()
-    # 0.7 is the default; use a value that actually differs from it.
+    # Must differ from the default, or the assertion passes for the wrong reason.
     assert base.retrieval_config_hash() != Settings(hybrid_alpha=0.4).retrieval_config_hash()
     assert base.retrieval_config_hash() != Settings(retrieval_top_k=20).retrieval_config_hash()
     assert (
@@ -31,11 +31,23 @@ def test_config_hash_tracks_the_fusion_method():
     assert Settings().retrieval_config_hash() != Settings(fusion="rrf").retrieval_config_hash()
 
 
+def test_config_hash_tracks_the_lexical_ranking_function():
+    """BM25 and ts_rank_cd scored 69.6% and 46.9% recall@5 on the same corpus."""
+    base = Settings()
+    assert (
+        base.retrieval_config_hash()
+        != Settings(lexical_ranking="ts_rank_cd").retrieval_config_hash()
+    )
+    assert base.retrieval_config_hash() != Settings(bm25_k1=2.0).retrieval_config_hash()
+    assert base.retrieval_config_hash() != Settings(bm25_b=0.4).retrieval_config_hash()
+
+
 def test_defaults_match_the_measured_best_configuration():
     """Guards against a default silently reverting to the worse-performing setup."""
     settings = Settings()
     assert settings.fusion == "weighted"
-    assert settings.hybrid_alpha == 0.7
+    assert settings.lexical_ranking == "bm25"
+    assert settings.hybrid_alpha == 0.8
 
 
 def test_config_hash_ignores_where_the_corpus_happens_to_live():

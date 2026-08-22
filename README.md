@@ -38,10 +38,10 @@ this system's own retrieval, which would make the metric measure the system agai
 <!-- METRICS:LAYER1:START -->
 | Metric | k=3 | k=5 | k=10 |
 |---|---|---|---|
-| Recall@k on article IDs | 77.1% | 84.8% | 92.0% |
-Gold set: **97** questions. MRR **0.735**.
+| Recall@k on article IDs | 75.5% | 85.3% | 93.0% |
+Gold set: **97** questions. MRR **0.712**.
 
-<sub>Run `550d521a` · 2026-08-21T17:07:07+00:00 · embeddings `intfloat/multilingual-e5-large@3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3` · config `5a945bc32acf` · $0.00 · 114s</sub>
+<sub>Run `865e7df7` · 2026-08-22T10:05:50+00:00 · embeddings `intfloat/multilingual-e5-large@3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3` · config `7976e955a84d` · $0.00 · 84s</sub>
 <!-- METRICS:LAYER1:END -->
 
 **What each retrieval leg contributes**, measured over the same gold set. This is the argument for
@@ -49,14 +49,32 @@ hybrid retrieval stated as evidence rather than as assertion — and it very nea
 
 | Configuration | recall@5 | MRR |
 |---|---|---|
-| Lexical only (Polish full-text) | 46.9% | 0.410 |
-| Hybrid, Reciprocal Rank Fusion | 75.5% | 0.627 |
+| Lexical only, `ts_rank_cd` | 46.9% | 0.410 |
+| Lexical only, BM25 | 69.6% | 0.610 |
+| Hybrid, Reciprocal Rank Fusion, equal weights | 84.3% | 0.698 |
 | Dense only (multilingual-e5-large) | 80.2% | 0.699 |
-| **Hybrid, weighted α=0.7** | **84.8%** | **0.735** |
+| **Hybrid, weighted α=0.8** | **85.3%** | **0.712** |
 
-RRF weights both legs equally. Because the lexical leg is far weaker here, equal weighting pushed its
-noise into the top ranks and made hybrid retrieval **worse than dense alone**. Weighting the dense leg
-at 0.7 recovers the gain and beats it by 4.6 points. See [ADR 0003](docs/adr/0003-hybrid-retrieval-without-reranker.md).
+Two findings, both of which contradicted an assumption the design started with.
+
+**RRF made hybrid retrieval worse than dense alone.** It weights both legs equally, and the lexical
+leg was far weaker, so its noise was promoted into the top ranks. Weighting the dense leg recovers
+the gain. ([ADR 0003](docs/adr/0003-hybrid-retrieval-without-reranker.md))
+
+**The lexical leg was weak for a specific, fixable reason: Postgres ranking has no IDF term.**
+Neither `ts_rank` nor `ts_rank_cd` knows how rare a lexeme is — and on this corpus `art` and `dział`
+occur in *all* 543 chunks while `pracownik` occurs in 403, which are precisely the words an
+employment-law question contains. Replacing it with BM25 over a materialised inverted index took the
+leg from 46.9% to 69.6%. ([ADR 0008](docs/adr/0008-bm25-over-ts-rank-cd.md))
+
+That second fix improved the *merged* system by half a point, and MRR fell from 0.736 to 0.712. It
+was adopted anyway, and both figures are reported here rather than only the favourable one.
+
+**Where the remaining error actually is.** Candidate-pool recall — the share of required articles
+reaching the pool at any rank — is **96.9%**. Nothing downstream can retrieve an article neither leg
+proposed, so that is the ceiling on the whole pipeline. With recall@5 at 85.3%, about **eleven
+points are being lost to ranking rather than to retrieval**, which is what a reranker recovers and
+what makes it the next thing worth building.
 
 ### Layer 2 — audit quality
 
@@ -86,7 +104,7 @@ it and an answer grounded in them.* The auditor is that engine called in a loop 
 clauses.
 
 - `src/kontrakt_guard/ingestion` — ISAP acquisition, article-aware parsing, embedding, pgvector load
-- `src/kontrakt_guard/retrieval` — hybrid search (Postgres full-text BM25 + pgvector dense), merge, LLM relevance grading
+- `src/kontrakt_guard/retrieval` — hybrid search (BM25 over Postgres full-text + pgvector dense), merge, LLM relevance grading
 - `src/kontrakt_guard/graphs` — LangGraph flows: Q&A and contract audit, both with an explicit refusal path
 - `src/kontrakt_guard/api` — FastAPI: `POST /audit`, `POST /ask`
 - `evals/` — gold set, synthetic contract generator, metric computation

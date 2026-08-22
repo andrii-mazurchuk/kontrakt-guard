@@ -30,6 +30,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -39,14 +40,36 @@ from psycopg.rows import DictRow
 from evals.gold import GoldQuestion, load_gold
 from evals.schema import HISTORY_PATH, MetricsRow, RetrievalMetrics, RunContext, append_row
 from ingestion.chunk import query_input
-from ingestion.db import connect
+from ingestion.db import connect, lexical_index_is_stale
 from ingestion.embed import Embedder
 from ingestion.manifest import load_manifest
 from kontrakt_guard.config import Settings, get_settings
-from retrieval.search import dense_search, lexical_search, merge
+from retrieval.search import Ranking, dense_search, lexical_search, merge
 
 REPORTED_K = (3, 5, 10)
 Leg = Literal["hybrid", "lexical", "dense"]
+
+# Effectively unbounded: the merged pool is at most bm25_candidates +
+# vector_candidates chunks, which collapse to fewer articles still.
+POOL_LIMIT = 10_000
+
+
+@dataclass(frozen=True)
+class Scores:
+    """One evaluation of the gold set.
+
+    `pool_recall` is the fraction of required articles that reached the candidate
+    pool at any rank. Nothing downstream — fusion weight, k, a reranker, the LLM
+    grading node — can recover an article that neither leg proposed, so this is
+    the ceiling on the whole pipeline, and the gap between it and recall@5 is
+    what better ranking is worth.
+    """
+
+    recall: dict[int, float]
+    hit_rate: dict[int, float]
+    mrr: float
+    pool_recall: float
+    missed: list[str]
 
 
 def retrieved_articles(
@@ -58,6 +81,7 @@ def retrieved_articles(
     limit: int,
     fusion: Literal["rrf", "weighted"] = "rrf",
     alpha: float | None = None,
+    ranking: Ranking | None = None,
 ) -> list[str]:
     """Ranked, de-duplicated article ids for one question.
 
@@ -65,7 +89,14 @@ def retrieved_articles(
     distinct articles.
     """
     lexical = (
-        lexical_search(conn, question, settings.bm25_candidates)
+        lexical_search(
+            conn,
+            question,
+            settings.bm25_candidates,
+            ranking=ranking or settings.lexical_ranking,
+            k1=settings.bm25_k1,
+            b=settings.bm25_b,
+        )
         if leg in ("hybrid", "lexical")
         else []
     )
@@ -108,19 +139,24 @@ def score(
     ks: Sequence[int] = REPORTED_K,
     fusion: Literal["rrf", "weighted"] = "rrf",
     alpha: float | None = None,
-) -> tuple[dict[int, float], dict[int, float], dict[int, float], list[str]]:
-    """Return (recall@k, hit_rate@k, mrr, ids missed at the largest reported k)."""
-    top = max(ks)
+    ranking: Ranking | None = None,
+) -> Scores:
     recall_totals = dict.fromkeys(ks, 0.0)
     hit_totals = dict.fromkeys(ks, 0.0)
     reciprocal = 0.0
+    pool_total = 0.0
     missed: list[str] = []
 
     for question in questions:
+        # The whole candidate pool, unbounded, alongside the top-k ordering. No
+        # fusion or reranker can retrieve an article that neither leg proposed,
+        # so pool recall is the ceiling on everything downstream — and the number
+        # that says whether to invest in the legs or in the ranking between them.
         ranked = retrieved_articles(
-            conn, question.question, embedder, settings, leg, top, fusion, alpha
+            conn, question.question, embedder, settings, leg, POOL_LIMIT, fusion, alpha, ranking
         )
         truth = set(question.ground_truth_articles)
+        pool_total += len(truth & set(ranked)) / len(truth)
 
         for k in ks:
             found = truth & set(ranked[:k])
@@ -134,11 +170,12 @@ def score(
             missed.append(question.id)
 
     n = len(questions)
-    return (
-        {k: recall_totals[k] / n for k in ks},
-        {k: hit_totals[k] / n for k in ks},
-        {0: reciprocal / n},
-        missed,
+    return Scores(
+        recall={k: recall_totals[k] / n for k in ks},
+        hit_rate={k: hit_totals[k] / n for k in ks},
+        mrr=reciprocal / n,
+        pool_recall=pool_total / n,
+        missed=missed,
     )
 
 
@@ -198,6 +235,12 @@ def main() -> int:
         default=None,
         help="Dense weight for weighted fusion. Defaults to Settings.hybrid_alpha.",
     )
+    parser.add_argument(
+        "--ranking",
+        choices=["bm25", "ts_rank_cd"],
+        default=None,
+        help="Lexical scoring function. Defaults to Settings.lexical_ranking.",
+    )
     parser.add_argument("--record", action="store_true", help="Append to metrics/history.jsonl.")
     args = parser.parse_args()
 
@@ -210,9 +253,23 @@ def main() -> int:
     embedder = Embedder(settings)
     fusion = args.fusion or settings.fusion
 
+    ranking = args.ranking or settings.lexical_ranking
+    uses_lexical = args.leg in ("hybrid", "lexical")
+
     started = time.monotonic()
     with connect(settings) as conn:
-        recall, hit_rate, mrr, missed = score(
+        # A materialised view is a snapshot. Scoring against statistics left over
+        # from a previous corpus would move the number with nothing to indicate
+        # why, so refuse rather than report.
+        if uses_lexical and ranking == "bm25" and lexical_index_is_stale(conn):
+            print(
+                "BM25 statistics are stale — chunk_terms/corpus_stats do not match "
+                "the corpus. Run: uv run python -m ingestion.build",
+                file=sys.stderr,
+            )
+            return 1
+
+        scores = score(
             questions,
             conn,
             embedder,
@@ -220,24 +277,35 @@ def main() -> int:
             args.leg,
             fusion=fusion,
             alpha=args.alpha,
+            ranking=ranking,
         )
     duration = time.monotonic() - started
 
     label = args.leg if args.leg != "hybrid" else f"{args.leg}/{fusion}"
+    if uses_lexical:
+        label += f", {ranking}"
     print(f"Layer 1 — retrieval [{label}], {len(questions)} gold questions\n")
     print(f"{'k':>4}  {'recall@k':>10}  {'hit_rate@k':>11}")
     for k in REPORTED_K:
-        print(f"{k:>4}  {recall[k]:>9.1%}  {hit_rate[k]:>10.1%}")
-    print(f"\nMRR: {mrr[0]:.3f}   duration: {duration:.1f}s")
-    if missed:
-        print(f"\nmissed at k=5 ({len(missed)}): {', '.join(missed)}")
+        print(f"{k:>4}  {scores.recall[k]:>9.1%}  {scores.hit_rate[k]:>10.1%}")
+    print(f"\nMRR: {scores.mrr:.3f}   duration: {duration:.1f}s")
+
+    # The ceiling and the distance to it. A large gap says the ranking is losing
+    # articles the legs already found, which is a reranker's job; a small one says
+    # the legs themselves are the limit and no amount of reordering will help.
+    headroom = scores.pool_recall - scores.recall[5]
+    print(
+        f"candidate-pool recall: {scores.pool_recall:.1%} ({headroom:+.1%} headroom above recall@5)"
+    )
+    if scores.missed:
+        print(f"\nmissed at k=5 ({len(scores.missed)}): {', '.join(scores.missed)}")
 
     if args.record:
         row = build_row(
             questions=questions,
-            recall=recall,
-            mrr=mrr[0],
-            missed=missed,
+            recall=scores.recall,
+            mrr=scores.mrr,
+            missed=scores.missed,
             duration=duration,
             settings=settings,
             embedder=embedder,

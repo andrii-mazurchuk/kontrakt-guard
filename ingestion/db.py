@@ -36,6 +36,41 @@ def apply_schema(conn: psycopg.Connection[DictRow], path: Path = SCHEMA_PATH) ->
     conn.commit()
 
 
+def refresh_lexical_stats(conn: psycopg.Connection[DictRow]) -> None:
+    """Rebuild the BM25 statistics from the current contents of `chunks`.
+
+    Order matters: `corpus_stats` reads `chunk_terms`, so refreshing it first
+    would compute avgdl from the previous corpus. Neither statement commits —
+    the caller decides the transaction boundary, which is how the statistics and
+    the rows they describe stay consistent.
+    """
+    conn.execute("REFRESH MATERIALIZED VIEW chunk_terms")
+    conn.execute("REFRESH MATERIALIZED VIEW corpus_stats")
+
+
+def lexical_index_is_stale(conn: psycopg.Connection[DictRow]) -> bool:
+    """Whether the BM25 statistics disagree with the corpus they describe.
+
+    A materialised view is a snapshot, and a stale one produces a plausible
+    ranking from a corpus that no longer exists — the failure mode this project
+    keeps meeting, where nothing errors and only the metric moves. Cheap enough
+    to assert before an eval run.
+    """
+    row = conn.execute(
+        """
+        SELECT (SELECT n_docs FROM corpus_stats) AS recorded,
+               (SELECT count(*) FROM chunks)::float8 AS actual,
+               (SELECT count(DISTINCT chunk_id) FROM chunk_terms)::float8 AS indexed
+        """
+    ).fetchone()
+    if row is None:
+        return True
+    # Indexed may legitimately fall short of actual if a chunk's tsvector is
+    # empty, but it can never exceed it: that means rows deleted since the last
+    # refresh are still being scored.
+    return bool(row["recorded"] != row["actual"] or row["indexed"] > row["actual"])
+
+
 def polish_config_available(conn: psycopg.Connection[DictRow]) -> bool:
     """Whether the Polish text-search configuration exists.
 

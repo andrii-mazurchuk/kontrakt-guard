@@ -16,3 +16,4 @@ nobody reads is worth nothing.
 | [0005](0005-artifact-pipeline-cloud-deploy-deferred.md) | Publish images now, defer the cloud target | Accepted |
 | [0006](0006-trunk-based-branching.md) | Trunk-based branching with mandatory PRs | Accepted |
 | [0007](0007-pending-amendments.md) | Ingest the law in force, exclude future-dated amendments | Accepted |
+| [0008](0008-bm25-over-ts-rank-cd.md) | BM25 over a materialised inverted index, not `ts_rank_cd` | Accepted |

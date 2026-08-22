@@ -58,11 +58,28 @@ class Settings(BaseSettings):
     # lexical leg is far weaker than the dense one (recall@5 of 46.9% against
     # 80.2%), so equal weighting injected noise into the top ranks and made hybrid
     # retrieval *worse* than dense alone. See ADR 0003.
+    # How the lexical leg scores a match. Postgres's ts_rank_cd has no inverse
+    # document frequency term, so lexemes present in most of the corpus ranked as
+    # strongly as distinguishing ones — on a corpus of employment law, that means
+    # "pracownik" carried the same weight as the term the question turns on.
+    # BM25 is computed over a materialised inverted index instead. See ADR 0008.
+    lexical_ranking: Literal["bm25", "ts_rank_cd"] = "bm25"
+
+    # BM25 free parameters, at their standard values. k1 governs how quickly term
+    # frequency saturates, b how strongly length normalisation applies. Statute
+    # articles vary in length by an order of magnitude, so b is load-bearing here.
+    bm25_k1: float = Field(default=1.2, ge=0.0)
+    bm25_b: float = Field(default=0.75, ge=0.0, le=1.0)
+
     fusion: Literal["weighted", "rrf"] = "weighted"
 
-    # Weight of the dense leg when merging. Swept over the gold set: 0.6 gave
-    # recall@5 of 83.2%, 0.7 gave 84.8%, 0.8 gave 81.7%.
-    hybrid_alpha: float = Field(default=0.7, ge=0.0, le=1.0)
+    # Weight of the dense leg when merging. Re-swept after the lexical leg moved
+    # to BM25, because the old optimum was tuned against a much weaker leg.
+    # Recall@5 across 0.6/0.7/0.8/0.85 is 84.8/84.3/85.3/83.8 — a plateau roughly
+    # one question wide on 97 questions, so the differences inside it are not
+    # meaningful on their own. 0.8 is taken because it is the joint best on
+    # recall@5, recall@10 and MRR rather than on any one of them. See ADR 0008.
+    hybrid_alpha: float = Field(default=0.8, ge=0.0, le=1.0)
 
     # --- Eval cost control --------------------------------------------------
     eval_max_cost_usd: float = 5.0
@@ -87,6 +104,9 @@ class Settings(BaseSettings):
             "retrieval_top_k": self.retrieval_top_k,
             "bm25_candidates": self.bm25_candidates,
             "vector_candidates": self.vector_candidates,
+            "lexical_ranking": self.lexical_ranking,
+            "bm25_k1": self.bm25_k1,
+            "bm25_b": self.bm25_b,
             "fusion": self.fusion,
             "hybrid_alpha": self.hybrid_alpha,
             "model_cheap": self.model_cheap,

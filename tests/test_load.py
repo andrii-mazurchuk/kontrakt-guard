@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from ingestion.chunk import Chunk, assert_within_model_limit, embedding_input, search_text
-from ingestion.db import apply_schema, connect
+from ingestion.db import apply_schema, connect, refresh_lexical_stats
 from ingestion.load import column_dimension, corpus_stats, load_chunks
 
 pytestmark = pytest.mark.integration
@@ -63,6 +63,10 @@ def conn():
         # teardown error that masks the real failure.
         connection.rollback()
         connection.execute("DELETE FROM chunks WHERE act = 'kp-test'")
+        # The BM25 statistics are materialised, so removing the fixture rows
+        # without rebuilding them would leave the database describing a corpus
+        # that no longer exists — and the next eval run would refuse to start.
+        refresh_lexical_stats(connection)
         connection.commit()
 
 

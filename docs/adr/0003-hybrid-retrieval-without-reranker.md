@@ -51,6 +51,14 @@ The lexical leg's weakness is itself a finding worth chasing: Postgres `ts_rank_
 so common legal vocabulary — *pracownik*, *pracodawca*, *umowa* — contributes as much to the score as
 a distinguishing term does. That, rather than a reranker, now looks like the highest-value next change.
 
+**Followed up 2026-08-22 in [ADR 0008](0008-bm25-over-ts-rank-cd.md), and it was not.** BM25 took the
+lexical leg from 46.9% to 69.6% recall@5 and moved the merged system by half a point. The
+prediction — that fixing the weaker leg was worth more than a reranker — was wrong, and the
+measurement that refuted it also explains why: candidate-pool recall is 96.9% under both rankings, so
+both legs were already proposing the right articles and the loss is in the ordering. The default
+merge weight moved from α=0.7 to α=0.8 in the same change, re-swept because the old optimum had been
+fitted against a much weaker leg.
+
 **Caveat:** α was tuned on the same 97 questions the headline number is reported over. With one
 parameter and no held-out split, some of the 4.6-point gain is fitted to this set. Recorded in
 `LIMITATIONS.md` rather than left for a reader to infer.
@@ -58,5 +66,7 @@ parameter and no held-out split, some of the 4.6-point gain is fitted to this se
 ## What would change our mind
 
 Layer-1 recall@10 being materially higher than recall@3 — that gap is exactly the space a reranker
-recovers. It currently is (92.0% against 77.1%), which strengthens the case for a reranker as a v2
-item, once the lexical leg has been given an IDF-aware ranking.
+recovers. It is (93.0% against 75.5%), and candidate-pool recall of 96.9% puts a firm number on the
+headroom: about eleven points sit between what the legs already propose and what survives to k=5.
+The lexical leg has since been given an IDF-aware ranking, so that caveat is discharged and the case
+for a reranker is now the strongest remaining one.

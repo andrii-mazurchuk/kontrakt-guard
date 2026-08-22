@@ -15,6 +15,7 @@ import psycopg
 from psycopg.rows import DictRow
 
 from ingestion.chunk import Chunk, assert_within_model_limit, embedding_input, search_text
+from ingestion.db import refresh_lexical_stats
 
 
 class SupportsEmbedding(Protocol):
@@ -148,6 +149,13 @@ def load_chunks(
         removed = prune_stale(conn, chunks)
         if removed:
             report.append(f"  pruned {removed} stale chunk(s) from a previous parse")
+
+    # Inside the same transaction as the upsert and the prune. BM25 scores rows
+    # against corpus-wide statistics, so statistics committed separately from the
+    # rows they summarise would leave a window where every lexical search is
+    # scored against a corpus that does not exist.
+    refresh_lexical_stats(conn)
+    report.append("  refreshed BM25 statistics")
 
     conn.commit()
     return report

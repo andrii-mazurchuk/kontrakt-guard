@@ -81,3 +81,54 @@ CREATE INDEX IF NOT EXISTS chunks_citation_idx ON chunks (act, article);
 -- written ("art. 29 § 1", "Art. 29 par. 1", "art 29 ust 1").
 CREATE INDEX IF NOT EXISTS chunks_article_trgm_idx
     ON chunks USING gin (article gin_trgm_ops);
+
+
+-- ---------------------------------------------------------------------------
+-- BM25 statistics
+-- ---------------------------------------------------------------------------
+-- Postgres has no BM25. `ts_rank` and `ts_rank_cd` score term frequency and
+-- cover density but carry **no inverse document frequency term**, so a lexeme
+-- occurring in every chunk counts for as much as one occurring in three. On this
+-- corpus that is not a subtle effect: 'art', 'dział' and 'dziać' each appear in
+-- 543 of 543 chunks, and 'pracownik' in 403 — the exact words a Polish
+-- employment-law question is most likely to contain.
+--
+-- The inverted index is materialised because BM25 needs per-(chunk, lexeme) term
+-- frequency and per-chunk length, neither of which is reachable from a tsvector
+-- without unnesting it. Unnesting at query time is O(corpus) per search.
+--
+-- Refreshed by the loader in the same transaction as the upsert, so the two can
+-- never be committed out of step; `lexical_index_is_stale` re-checks before any
+-- eval, because a stale index would move a metric with nothing to show for it.
+CREATE MATERIALIZED VIEW IF NOT EXISTS chunk_terms AS
+SELECT
+    c.id AS chunk_id,
+    t.lexeme,
+    -- Term frequency. A tsvector position list is capped at 256 entries per
+    -- lexeme; nothing here approaches that (the longest chunk is 279 tokens
+    -- in total). `positions` is NULL only for a stripped tsvector, which this
+    -- schema never produces — the coalesce is a floor, not an expected path.
+    coalesce(array_length(t.positions, 1), 1)::int AS tf,
+    -- Document length, denormalised onto every term row so scoring needs no
+    -- second join. BM25's length normalisation compares this against avgdl.
+    sum(coalesce(array_length(t.positions, 1), 1))
+        OVER (PARTITION BY c.id)::int AS doc_len
+FROM chunks c, unnest(c.tsv) t;
+
+-- Lexeme first: a search looks up the handful of lexemes in the question, so the
+-- leading column must be the one being filtered. Unique overall, which is also
+-- what REFRESH ... CONCURRENTLY would require were the corpus ever large enough
+-- to need it.
+CREATE UNIQUE INDEX IF NOT EXISTS chunk_terms_lexeme_idx
+    ON chunk_terms (lexeme, chunk_id);
+
+-- Corpus-level constants. One row, so scoring reads them without scanning.
+--
+-- n_docs counts chunks rather than distinct chunk_ids in chunk_terms: a chunk
+-- whose tsvector came out empty still exists and still belongs in the
+-- denominator of the IDF term.
+CREATE MATERIALIZED VIEW IF NOT EXISTS corpus_stats AS
+SELECT
+    (SELECT count(*) FROM chunks)::float8 AS n_docs,
+    (SELECT coalesce(avg(doc_len), 1)
+       FROM (SELECT DISTINCT chunk_id, doc_len FROM chunk_terms) d)::float8 AS avgdl;

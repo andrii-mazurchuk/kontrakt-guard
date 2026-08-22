@@ -28,6 +28,7 @@ from ingestion.db import TS_CONFIG
 RRF_K = 60
 
 Leg = Literal["lexical", "dense", "hybrid"]
+Ranking = Literal["bm25", "ts_rank_cd"]
 
 
 class Hit(BaseModel):
@@ -108,17 +109,88 @@ LIMIT %(limit)s
 """
 
 
+# BM25, computed against the materialised inverted index rather than by
+# `ts_rank_cd`.
+#
+# The problem being fixed: Postgres's ranking functions have no inverse document
+# frequency term. `ts_rank_cd` measures how densely the matched lexemes cluster
+# within a document and how often they occur, but it never asks how *rare* they
+# are. Every question in the gold set contains 'pracownik' or 'praca'; those
+# lexemes sit in three quarters of the corpus and in 'art'/'dział' the figure is
+# 543 chunks out of 543. Ranking treated them as evidence, so the lexical leg was
+# largely sorting by how often an article says "employee".
+#
+#     score(d, q) = Σ  IDF(t) · ( tf · (k1 + 1) )
+#                  t∈q          ───────────────────────────────────
+#                               tf + k1 · (1 - b + b · |d| / avgdl)
+#
+# with the Robertson/Sparck-Jones IDF, `ln(1 + (N - df + 0.5)/(df + 0.5))`. The
+# +1 inside the logarithm is what keeps it non-negative: the raw form goes
+# negative for a term in more than half the corpus, which would let a common word
+# actively push a matching chunk *down* the ranking.
+#
+# Lexemes come from `to_tsvector`, so the query is analysed by the same Polish
+# Hunspell configuration that built the index — a lemma matched against a raw
+# token would silently match nothing.
+_BM25_SQL = f"""
+WITH q AS (
+    SELECT DISTINCT lexeme FROM unnest(to_tsvector(%(cfg)s, %(q)s))
+),
+stats AS (
+    SELECT n_docs, avgdl FROM corpus_stats
+),
+df AS (
+    SELECT ct.lexeme, count(*)::float8 AS df
+    FROM chunk_terms ct
+    JOIN q USING (lexeme)
+    GROUP BY ct.lexeme
+),
+scored AS (
+    SELECT
+        ct.chunk_id,
+        sum(
+            ln(1 + (s.n_docs - df.df + 0.5) / (df.df + 0.5))
+            * (ct.tf * (%(k1)s + 1))
+            / (ct.tf + %(k1)s * (1 - %(b)s + %(b)s * ct.doc_len / s.avgdl))
+        ) AS score
+    FROM chunk_terms ct
+    JOIN df USING (lexeme)
+    CROSS JOIN stats s
+    GROUP BY ct.chunk_id
+)
+SELECT {_SELECT}, scored.score AS rank
+FROM chunks
+JOIN scored ON scored.chunk_id = chunks.id
+WHERE (%(include_repealed)s OR NOT repealed)
+ORDER BY rank DESC
+LIMIT %(limit)s
+"""
+
+
 def lexical_search(
     conn: psycopg.Connection[DictRow],
     question: str,
     limit: int = 25,
     include_repealed: bool = False,
+    ranking: Ranking = "bm25",
+    k1: float = 1.2,
+    b: float = 0.75,
 ) -> list[Hit]:
-    """Rank by Polish full-text relevance, OR-ing the question's lemmas."""
-    rows = conn.execute(
-        _LEXICAL_SQL,
-        {"cfg": TS_CONFIG, "q": question, "limit": limit, "include_repealed": include_repealed},
-    ).fetchall()
+    """Rank by Polish full-text relevance, OR-ing the question's lemmas.
+
+    `ranking` selects between BM25 and Postgres's built-in `ts_rank_cd`. The
+    latter is kept so the earlier measurement stays reproducible, not because it
+    is a supported alternative.
+    """
+    params = {
+        "cfg": TS_CONFIG,
+        "q": question,
+        "limit": limit,
+        "include_repealed": include_repealed,
+    }
+    if ranking == "bm25":
+        params |= {"k1": k1, "b": b}
+    rows = conn.execute(_BM25_SQL if ranking == "bm25" else _LEXICAL_SQL, params).fetchall()
     return [_to_hit(row, float(row["rank"])) for row in rows]
 
 
@@ -148,12 +220,21 @@ def dense_search(
 
 
 def _reciprocal_rank_fusion(
-    lexical: list[Hit], dense: list[Hit], rrf_k: int = RRF_K
+    lexical: list[Hit], dense: list[Hit], alpha: float = 0.5, rrf_k: int = RRF_K
 ) -> dict[int, float]:
+    """Combine ranks rather than scores. `alpha` is the dense weight.
+
+    Classic RRF weights both legs equally, which is `alpha = 0.5` — the weights
+    scale every score by a constant there, so the ordering is identical to the
+    unweighted formula and the number recorded under it stays comparable.
+
+    Weighting matters because the two legs are not equally trustworthy, and how
+    unequal they are is a property of the corpus rather than of the method.
+    """
     scores: dict[int, float] = {}
-    for leg in (lexical, dense):
+    for weight, leg in ((1.0 - alpha, lexical), (alpha, dense)):
         for rank, hit in enumerate(leg, start=1):
-            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + 1.0 / (rrf_k + rank)
+            scores[hit.chunk_id] = scores.get(hit.chunk_id, 0.0) + weight / (rrf_k + rank)
     return scores
 
 
@@ -186,7 +267,7 @@ def merge(
 ) -> list[Hit]:
     """Combine the two candidate lists into a single ranking of length k."""
     scores = (
-        _reciprocal_rank_fusion(lexical, dense)
+        _reciprocal_rank_fusion(lexical, dense, alpha)
         if fusion == "rrf"
         else _weighted_fusion(lexical, dense, alpha)
     )

@@ -31,7 +31,11 @@ def main() -> int:
         default="hybrid",
         help="Run one leg alone to see what it contributes.",
     )
-    parser.add_argument("--fusion", choices=["rrf", "weighted"], default="rrf")
+    # Defaulting to None rather than a literal: a hard-coded default here would
+    # let the inspection tool show a different configuration from the one the
+    # eval measures, which is the one way this command could actively mislead.
+    parser.add_argument("--fusion", choices=["rrf", "weighted"], default=None)
+    parser.add_argument("--ranking", choices=["bm25", "ts_rank_cd"], default=None)
     parser.add_argument("--include-repealed", action="store_true")
     args = parser.parse_args()
 
@@ -43,7 +47,13 @@ def main() -> int:
 
         if args.leg in ("hybrid", "lexical"):
             lexical = lexical_search(
-                conn, args.question, settings.bm25_candidates, args.include_repealed
+                conn,
+                args.question,
+                settings.bm25_candidates,
+                args.include_repealed,
+                ranking=args.ranking or settings.lexical_ranking,
+                k1=settings.bm25_k1,
+                b=settings.bm25_b,
             )
         if args.leg in ("hybrid", "dense"):
             vector = Embedder(settings).encode_query(query_input(args.question))
@@ -54,7 +64,9 @@ def main() -> int:
         elif args.leg == "dense":
             hits = dense[: args.k]
         else:
-            hits = merge(lexical, dense, args.k, args.fusion, settings.hybrid_alpha)
+            hits = merge(
+                lexical, dense, args.k, args.fusion or settings.fusion, settings.hybrid_alpha
+            )
 
     if not hits:
         print("no results — the corpus could not ground this question", file=sys.stderr)

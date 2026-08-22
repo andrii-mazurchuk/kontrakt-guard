@@ -25,13 +25,22 @@ no F1 score can paper over:
 
 ## The fusion weight was tuned on the set it is reported over
 
-`hybrid_alpha` was swept across 0.6, 0.7 and 0.8 against the same 97 gold questions the headline
-recall@k is computed on. There is no held-out split. With a single parameter and 97 questions the
-distortion is small, but it is not zero: some part of the 4.6-point gain over dense-only retrieval is
-fitted to this particular set rather than to Polish legal retrieval in general.
+`hybrid_alpha` was swept across 0.3–0.9 against the same 97 gold questions the headline recall@k is
+computed on, and the fusion method and lexical ranking were chosen the same way. There is no
+held-out split. Some part of the gain over dense-only retrieval is therefore fitted to this
+particular set rather than to Polish legal retrieval in general.
 
-Treat the leg comparison in the README as sound — the gap between 46.9% and 84.8% is far too wide to
-be an artefact — and the precise value of α as the softest number in the table.
+The α sweep makes the size of that effect visible rather than hiding it. Recall@5 across
+0.6/0.7/0.8/0.85 is 84.8/84.3/85.3/83.8 — **non-monotonic, and spanning about one question on a
+97-question set**. Differences of that size inside the plateau are not real; 0.8 was taken because
+it is the joint best across recall@5, recall@10 and MRR, not because 85.3% is meaningfully above
+84.8%.
+
+Treat the leg comparison in the README as sound — the gap between 46.9% and 85.3% is far too wide to
+be an artefact — and the precise value of α as the softest number in the table. By the same measure,
+the BM25-versus-`ts_rank_cd` comparison **on the lexical leg alone** (46.9% → 69.6%) is solid, while
+its half-point effect on the merged system is not distinguishable from noise, and is not claimed as
+an improvement.
 
 ## What in the gold set was human-checked, and what was not
 
