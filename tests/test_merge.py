@@ -80,6 +80,53 @@ def test_weighted_fusion_is_available_for_comparison():
     assert lexical_heavy[0].chunk_id == 1
 
 
+def test_rrf_at_alpha_half_is_the_classic_unweighted_formula():
+    """Equal weights scale every score by a constant, so the ordering is unchanged.
+
+    Pinned because the RRF figure already recorded in `metrics/history.jsonl` was
+    produced by the unweighted formula, and it stays comparable only while this
+    holds.
+    """
+    lexical = [hit(1, 9.0), hit(2, 8.0), hit(3, 7.0)]
+    dense = [hit(3, 0.9), hit(4, 0.8), hit(1, 0.7)]
+
+    ranked = [h.chunk_id for h in merge(lexical, dense, k=4, fusion="rrf", alpha=0.5)]
+    unweighted = sorted(
+        {1: 1 / 61 + 1 / 63, 2: 1 / 62, 3: 1 / 63 + 1 / 61, 4: 1 / 62}.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    assert ranked == [chunk_id for chunk_id, _ in unweighted]
+
+
+def test_weighting_rrf_shifts_the_balance_between_the_legs():
+    lexical = [hit(1, 9.0)]
+    dense = [hit(2, 0.9)]
+
+    assert merge(lexical, dense, k=2, fusion="rrf", alpha=0.9)[0].chunk_id == 2
+    assert merge(lexical, dense, k=2, fusion="rrf", alpha=0.1)[0].chunk_id == 1
+
+
+def test_both_fusions_demote_a_hit_only_one_leg_found():
+    """Neither method rescues an exclusive find, and RRF is the harsher of the two.
+
+    Worth pinning because the intuition runs the other way. Under weighted
+    fusion the lexical leg's top hit normalises to 1.0 and keeps `1 - alpha` of
+    it, so it still outranks the dense tail. Under RRF every dense rank down to
+    the candidate cutoff earns `alpha / (60 + rank)`, and with alpha at 0.8 that
+    beats `0.2 / 61` all the way down. A leg cannot promote what the other leg
+    never saw — which is why the candidate pool bounds the merged result.
+    """
+    lexical = [hit(1, 9.0)]
+    dense = [hit(2, 0.9), hit(3, 0.85), hit(4, 0.8)]
+
+    weighted = [h.chunk_id for h in merge(lexical, dense, k=4, fusion="weighted", alpha=0.8)]
+    reciprocal = [h.chunk_id for h in merge(lexical, dense, k=4, fusion="rrf", alpha=0.8)]
+
+    assert weighted.index(1) == 2
+    assert reciprocal.index(1) == 3
+
+
 def test_weighted_fusion_survives_a_flat_leg():
     """Min-max normalisation divides by the range, which is zero when all scores tie."""
     lexical = [hit(1, 5.0), hit(2, 5.0)]
