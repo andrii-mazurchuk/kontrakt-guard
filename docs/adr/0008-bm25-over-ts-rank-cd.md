@@ -72,7 +72,40 @@ recorded `ts_rank_cd` figures exactly, so the comparison is like-for-like.
 **+22.7 points of recall@5, and three times faster** — the index is scanned for the handful of
 lexemes in the question rather than every row that matches being ranked.
 
-<!-- ADR-0008-FUSION -->
+### The merged system
+
+Barely at all — and this is the result worth keeping.
+
+| configuration | recall@3 | recall@5 | recall@10 | MRR |
+|---|---|---|---|---|
+| `ts_rank_cd`, weighted α=0.7 *(previous default)* | **77.1%** | 84.8% | 92.0% | **0.736** |
+| **BM25, weighted α=0.8** *(new default)* | 75.5% | **85.3%** | **93.0%** | 0.712 |
+| BM25, RRF α=0.75 | 78.6% | 85.8% | 89.9% | 0.697 |
+| BM25, RRF α=0.5 *(classic, unweighted)* | 74.7% | 84.3% | — | 0.698 |
+| dense only | 72.9% | 80.2% | 93.0% | 0.700 |
+
+A 22.7-point improvement to the leg bought **half a point of recall@5**, and MRR and recall@3 both
+went *down*. Adopted regardless, for reasons that are not the headline number: the component is
+correct rather than defective, it is three times faster, and the lexical leg is what the citation
+lookup and the coming LLM grading node lean on directly rather than through the merge.
+
+The MRR regression is real and unexplained. The plausible reading is that `ts_rank_cd`'s cover
+density is a **proximity** signal — it rewards a chunk for mentioning the query's terms close
+together — and BM25 discards proximity entirely in exchange for rarity. Proximity appears to be a
+decent guide to which chunk belongs at rank 1, even while being a poor guide to which chunks belong
+in the top ten at all. Recorded as an open question, not as a settled explanation.
+
+α was re-swept because the previous optimum had been tuned against a far weaker leg. Recall@5
+across 0.6/0.7/0.8/0.85 is 84.8/84.3/85.3/83.8 — a plateau about one question wide on a 97-question
+set, so no value inside it is meaningfully better than its neighbours. 0.8 is taken because it is
+the joint best across recall@5, recall@10 and MRR rather than the winner on any single one.
+
+RRF gained a weight in the same change (α=0.5 reproduces the classic unweighted ordering exactly,
+so the figure already recorded under it stays comparable). It wins at k=3 and k=5 and loses at k=10.
+`retrieval_top_k` is 10 and that pool is what the grading node will receive, so weighted fusion
+keeps the default.
+
+
 
 ## What this did not fix
 
