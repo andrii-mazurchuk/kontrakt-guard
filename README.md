@@ -84,8 +84,36 @@ asks a model whether an answer reads well, which keeps failures attributable: La
 the right article was retrieved, this says whether the answer was built out of it.
 
 <!-- METRICS:ANSWERS:START -->
-_No eval runs recorded yet._
+| Measure | Value |
+|---|---|
+| Citation precision | 54.2% |
+| Citation recall | 78.3% |
+| **Citation F1** | **0.641** |
+| False refusals | 2.1% |
+| Hallucinated citations | 0.0% |
+| Uncited answers | 5.2% |
+End to end through the graph over **97** gold questions. The last three rows are failure rates — lower is better. A refusal here is a *false* refusal, since every gold question is answerable from the corpus by construction; without that row the refusal guardrail could be made perfect by refusing everything.
+
+<sub>Run `ade2ab74` · 2026-08-23T06:10:34+00:00 · embeddings `intfloat/multilingual-e5-large@3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3` · config `aeb463a95ec1` · $3.23 · 289s</sub>
 <!-- METRICS:ANSWERS:END -->
+
+Two of these deserve reading carefully rather than at face value.
+
+**Hallucinated citations are 0.0% across 97 questions** — no answer cited an article that was not
+retrieved. That is enforced in code, not requested in a prompt: the answer node names its citations
+in a structured field, and they are checked against the retrieved set before the answer is returned.
+A guardrail that lives only inside a prompt is one the model can decline to apply.
+
+**Citation precision of 54.2% is not straightforwardly an error rate.** The system cites about 1.4
+articles for every article the gold set names, and the gold set names only what is needed to *answer*
+the question — not every provision a careful answer might reasonably reference. Some of that gap is
+over-citation and some is the metric being stricter than a lawyer would be. It is reported as
+measured, and how much of it is real is an open question rather than a settled one.
+
+The actionable number is the third: **citation recall is 78.3% against retrieval's 93.0% recall@10**.
+About fifteen points go missing *after* retrieval has already found the right article — discarded by
+relevance grading or ignored by generation. That, not retrieval, is where this pipeline currently
+loses most of its ground truth.
 
 ### Layer 2 — audit quality
 
