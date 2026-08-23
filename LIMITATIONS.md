@@ -42,6 +42,21 @@ the BM25-versus-`ts_rank_cd` comparison **on the lexical leg alone** (46.9% → 
 its half-point effect on the merged system is not distinguishable from noise, and is not claimed as
 an improvement.
 
+## Citation precision measures agreement with the gold set, not correctness
+
+Layer 1b scores cited articles against `ground_truth_articles`, so a citation counts as wrong
+whenever the gold set does not list it. The gold set lists what is needed to **answer** the question,
+which is not the same as every provision a careful answer might reference.
+
+At 54.2% precision and 78.3% recall the system cites roughly **1.4 articles for every one the gold
+set names**. Some of that surplus is genuine over-citation; some is a legitimately broader answer
+being marked down. Nothing here separates the two, and no human has read the answers to find out.
+
+So treat **hallucinated citations (0.0%)** as the solid number — it is a mechanical check against the
+retrieved set, with no judgement in it — and **citation precision as the softest figure in the
+table**. Deciding the rest needs reference answers written by someone who knows the law, which the
+gold set does not currently carry.
+
 ## What in the gold set was human-checked, and what was not
 
 The 97 questions come from two sources and carry different evidentiary weight.
