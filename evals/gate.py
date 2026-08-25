@@ -80,11 +80,19 @@ def _tracked(row: MetricsRow) -> dict[str, float]:
 def check(layer: Layer, history: list[MetricsRow] | None = None) -> tuple[bool, list[str]]:
     """Return (passed, human-readable report lines)."""
     history = load_history() if history is None else history
-    rows = [r for r in history if r.metrics.layer == layer]
+    for_layer = [r for r in history if r.metrics.layer == layer]
+    # A cassette-served row reproduces an old measurement, so gating against it
+    # would compare the current build to a recording of itself. `append_row`
+    # already refuses to write one; this covers a hand-edited history file.
+    rows = [r for r in for_layer if r.context.provenance == "live"]
     lines: list[str] = []
 
+    skipped = len(for_layer) - len(rows)
+    if skipped:
+        lines.append(f"Ignoring {skipped} non-live (cassette-replayed) `{layer}` row(s).")
+
     if not rows:
-        return True, [f"No `{layer}` runs recorded yet — nothing to gate."]
+        return True, [*lines, f"No `{layer}` runs recorded yet — nothing to gate."]
 
     current = _tracked(rows[-1])
     baseline = _tracked(rows[-2]) if len(rows) >= 2 else None

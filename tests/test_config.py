@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from kontrakt_guard.config import Settings
 
 
@@ -58,6 +60,25 @@ def test_config_hash_ignores_where_the_corpus_happens_to_live():
     base = Settings()
     moved = Settings(postgres_host="prod.example.com", postgres_port=6543)
     assert base.retrieval_config_hash() == moved.retrieval_config_hash()
+
+
+def test_config_hash_is_unchanged_by_any_cassette_setting():
+    """How a response was obtained is provenance, not configuration.
+
+    If a cassette setting moved the hash, a replayed run would look like a
+    differently-configured measurement rather than like the same one replayed —
+    and the whole comparability argument for the hash would collapse.
+    `RunContext.provenance` carries that distinction instead.
+    """
+    base = Settings().retrieval_config_hash()
+    assert Settings(cassette_mode="replay").retrieval_config_hash() == base
+    assert Settings(cassette_mode="record").retrieval_config_hash() == base
+    assert Settings(cassette_name="qa-eval").retrieval_config_hash() == base
+    assert Settings(cassette_dir=Path("/tmp/tapes")).retrieval_config_hash() == base
+
+
+def test_the_cassette_is_off_unless_asked_for():
+    assert Settings().cassette_mode == "off"
 
 
 def test_secrets_do_not_leak_into_repr():

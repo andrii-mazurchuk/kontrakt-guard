@@ -39,7 +39,15 @@ import psycopg
 from psycopg.rows import DictRow
 
 from evals.gold import GoldQuestion, load_gold
-from evals.schema import HISTORY_PATH, MetricsRow, RetrievalMetrics, RunContext, append_row
+from evals.schema import (
+    HISTORY_PATH,
+    MetricsRow,
+    RetrievalMetrics,
+    RunContext,
+    append_row,
+    provenance_of,
+)
+from graphs.cassette import active_cassette
 from graphs.llm import Usage, cheap_model
 from graphs.qa_flow import rewrite_question
 from ingestion.chunk import query_input
@@ -211,9 +219,14 @@ def build_row(
     duration: float,
     settings: Settings,
     embedder: Embedder,
-    api_cost_usd: float = 0.0,
+    usage: Usage | None = None,
 ) -> MetricsRow:
-    """Assemble one history row, with enough provenance to reproduce the number."""
+    """Assemble one history row, with enough provenance to reproduce the number.
+
+    Takes the `Usage` object rather than a bare cost, so the row's cost and its
+    provenance are derived from the same source and cannot contradict each other.
+    """
+    usage = usage if usage is not None else Usage()
     # Resolve the embedding revision rather than recording the empty default.
     # retrieval_config_hash includes it, so an unresolved revision produces a hash
     # that silently fails to distinguish two different versions of the same model.
@@ -233,8 +246,9 @@ def build_row(
         # Zero unless --rewrite was used. Layer 1 is otherwise free, which is what
         # would let it gate a pull request; the rewrite node is the one part of it
         # that costs money, so its cost is recorded rather than assumed absent.
-        api_cost_usd=api_cost_usd,
+        api_cost_usd=usage.cost_usd,
         duration_s=duration,
+        provenance=provenance_of(usage),
     )
     return MetricsRow(
         context=context,
@@ -275,7 +289,24 @@ def main() -> int:
         help="Route questions through the flow's understand node first. BILLABLE.",
     )
     parser.add_argument("--record", action="store_true", help="Append to metrics/history.jsonl.")
+    parser.add_argument(
+        "--cassette",
+        choices=["off", "record", "replay", "auto"],
+        default=None,
+        help="Record the --rewrite calls to disk, or replay them for $0.00.",
+    )
+    parser.add_argument("--cassette-name", default=None, help="Which cassette directory to use.")
     args = parser.parse_args()
+
+    # Early, before the corpus is touched: a run served from a cassette can never
+    # be published, and finding that out after scoring 97 questions is too late.
+    if args.record and args.cassette in ("replay", "auto"):
+        print(
+            f"--record and --cassette {args.cassette} are contradictory: a run served from a "
+            "cassette is not a measurement and cannot be published.",
+            file=sys.stderr,
+        )
+        return 1
 
     questions = load_gold()
     if not questions:
@@ -283,6 +314,14 @@ def main() -> int:
         return 1
 
     settings = get_settings()
+    update: dict[str, str] = {}
+    if args.cassette is not None:
+        update["cassette_mode"] = args.cassette
+    if args.cassette_name is not None:
+        update["cassette_name"] = args.cassette_name
+    if update:
+        settings = settings.model_copy(update=update)
+
     embedder = Embedder(settings)
     fusion = args.fusion or settings.fusion
 
@@ -294,7 +333,8 @@ def main() -> int:
     usage = Usage()
     rewriter: Callable[[str], str] | None = None
     if args.rewrite:
-        if not settings.anthropic_api_key.get_secret_value():
+        # Replay never opens a socket, so it needs no key.
+        if settings.cassette_mode != "replay" and not settings.anthropic_api_key.get_secret_value():
             print("--rewrite makes billable calls and ANTHROPIC_API_KEY is unset", file=sys.stderr)
             return 1
         model = cheap_model(settings)
@@ -346,6 +386,9 @@ def main() -> int:
     )
     if args.rewrite:
         print(f"query rewrite: {usage.summary()}")
+        cassette = active_cassette()
+        if cassette is not None:
+            print(cassette.summary())
     if scores.missed:
         print(f"\nmissed at k=5 ({len(scores.missed)}): {', '.join(scores.missed)}")
 
@@ -358,7 +401,7 @@ def main() -> int:
             duration=duration,
             settings=settings,
             embedder=embedder,
-            api_cost_usd=usage.cost_usd,
+            usage=usage,
         )
         append_row(row)
         print(f"\nrecorded to {HISTORY_PATH} (corpus {row.context.corpus_manifest_sha[:12]})")

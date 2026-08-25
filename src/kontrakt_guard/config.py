@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -95,6 +96,19 @@ class Settings(BaseSettings):
 
     # --- Eval cost control --------------------------------------------------
     eval_max_cost_usd: float = 5.0
+
+    # --- Cassette (record / replay of LLM calls) ----------------------------
+    # Off by default, and a test asserts that `cheap_model` returns a plain
+    # ChatAnthropic under the defaults: the replay seam must never be able to
+    # reach production by way of a changed default. See ADR 0010.
+    #
+    # Deliberately absent from `retrieval_config_hash`: how a response was
+    # obtained is provenance, not configuration, and a cassette setting must
+    # never make a replayed run look like a differently-configured measurement.
+    # `RunContext.provenance` carries that distinction instead.
+    cassette_mode: Literal["off", "record", "replay", "auto"] = "off"
+    cassette_name: str = "default"
+    cassette_dir: Path = Path("cassettes")
 
     @property
     def postgres_dsn(self) -> str:
