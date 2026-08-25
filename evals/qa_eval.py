@@ -2,6 +2,7 @@
 
     uv run python -m evals.qa_eval --sample 10     # cheap first
     uv run python -m evals.qa_eval --record        # full set, appends a row
+    uv run python -m evals.qa_eval --cassette replay --cassette-name qa-eval   # free
 
 BILLABLE. Runs the whole graph — rewrite, retrieve, grade, answer — over the
 gold set, which is roughly twelve API calls per question. Check the cost first:
@@ -41,7 +42,15 @@ from datetime import UTC, datetime
 
 from evals.gold import GoldQuestion, load_gold
 from evals.retrieval_eval import _git
-from evals.schema import HISTORY_PATH, AnswerMetrics, MetricsRow, RunContext, append_row
+from evals.schema import (
+    HISTORY_PATH,
+    AnswerMetrics,
+    MetricsRow,
+    RunContext,
+    append_row,
+    provenance_of,
+)
+from graphs.cassette import CassetteMiss, active_cassette
 from graphs.llm import Usage
 from graphs.qa_flow import QAState, ask
 from ingestion.db import connect
@@ -148,6 +157,14 @@ def score(
     def attempt(question: GoldQuestion) -> Outcome | None:
         try:
             return run_one(question, embedder, settings, usage)
+        # Re-raised BEFORE the broad handler, and the order is load-bearing.
+        # Swallowed into `failures`, a cassette miss would look like an ordinary
+        # per-question error: under the 5% threshold the run would go on to
+        # score and publish metrics computed from a half-recorded cassette —
+        # numbers partly fabricated by omission. A miss means the tape is
+        # incomplete, which is a fact about the whole run, not about one question.
+        except CassetteMiss:
+            raise
         # Broad on purpose: any failure costs one question, never the run.
         except Exception as exc:
             failures.append((question.id, f"{type(exc).__name__}: {exc}"))
@@ -160,8 +177,13 @@ def score(
 
 
 def build_row(
-    metrics: AnswerMetrics, duration: float, settings: Settings, embedder: Embedder, cost: float
+    metrics: AnswerMetrics, duration: float, settings: Settings, embedder: Embedder, usage: Usage
 ) -> MetricsRow:
+    """One history row. Takes the `Usage` object, not a bare cost.
+
+    Provenance is derived from the same object the cost comes from, so the two
+    can never disagree about whether the run actually spent anything.
+    """
     revision = embedder.resolved_revision()
     pinned = settings.model_copy(update={"embedding_revision": revision})
     return MetricsRow(
@@ -175,8 +197,9 @@ def build_row(
             model_strong=settings.model_strong,
             retrieval_config_hash=pinned.retrieval_config_hash(),
             corpus_manifest_sha=load_manifest().digest(),
-            api_cost_usd=cost,
+            api_cost_usd=usage.cost_usd,
             duration_s=duration,
+            provenance=provenance_of(usage),
         ),
         metrics=metrics,
     )
@@ -189,10 +212,37 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample", type=int, default=0, help="Questions to run (0 = all).")
     parser.add_argument("--record", action="store_true", help="Append to metrics/history.jsonl.")
+    parser.add_argument(
+        "--cassette",
+        choices=["off", "record", "replay", "auto"],
+        default=None,
+        help="Record LLM calls to disk, or replay them for $0.00. See cassettes/README.md.",
+    )
+    parser.add_argument("--cassette-name", default=None, help="Which cassette directory to use.")
     args = parser.parse_args()
 
+    # Early, before the corpus is touched or a single call is made. Finding out
+    # at the end that a two-minute run cannot be recorded is finding out too
+    # late — and the cost of the mistake is the operator re-running it live.
+    if args.record and args.cassette in ("replay", "auto"):
+        print(
+            f"--record and --cassette {args.cassette} are contradictory: a run served from a "
+            "cassette is not a measurement and cannot be published.",
+            file=sys.stderr,
+        )
+        return 1
+
     settings = get_settings()
-    if not settings.anthropic_api_key.get_secret_value():
+    update: dict[str, str] = {}
+    if args.cassette is not None:
+        update["cassette_mode"] = args.cassette
+    if args.cassette_name is not None:
+        update["cassette_name"] = args.cassette_name
+    if update:
+        settings = settings.model_copy(update=update)
+
+    # Replay never opens a socket, so it needs no key. Every other mode does.
+    if settings.cassette_mode != "replay" and not settings.anthropic_api_key.get_secret_value():
         print("this eval is billable and ANTHROPIC_API_KEY is unset", file=sys.stderr)
         return 1
 
@@ -240,6 +290,10 @@ def main() -> int:
     print(f"  uncited answers      {metrics.uncited_answer_rate:>7.1%}")
     print(f"\n{usage.summary()}   duration: {duration:.1f}s")
 
+    cassette = active_cassette()
+    if cassette is not None:
+        print(cassette.summary())
+
     if metrics.false_refusals:
         print(f"\nrefused ({len(metrics.false_refusals)}): {', '.join(metrics.false_refusals)}")
 
@@ -250,7 +304,7 @@ def main() -> int:
             # the same measurement.
             print("\nrefusing to record a sampled run; drop --sample", file=sys.stderr)
             return 1
-        append_row(build_row(metrics, duration, settings, embedder, usage.cost_usd))
+        append_row(build_row(metrics, duration, settings, embedder, usage))
         print(f"\nrecorded to {HISTORY_PATH}")
     return 0
 

@@ -74,6 +74,14 @@ Neither half was checked by a lawyer. Ground truth in both was taken from a sour
 or from the statute — never from this system's own retrieval, which would make
 recall@k measure the system against itself.
 
+## A replayed run is not a measurement
+
+Evals can be re-run for free from a recorded cassette of Claude responses ([ADR
+0010](docs/adr/0010-cassette-replay-for-llm-evals.md)). Those runs reproduce what the model said on
+the day the cassette was recorded, so they say nothing about the system's behaviour today, and no
+number in the README ever comes from one: `append_row` refuses any run whose responses were served
+from a cassette, and the gate ignores such rows. Every published figure was paid for.
+
 ## The gold set is small and single-annotator
 
 Layer 1 uses roughly 30–50 questions derived from Państwowa Inspekcja Pracy material, with

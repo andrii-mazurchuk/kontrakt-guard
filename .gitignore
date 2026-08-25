@@ -30,6 +30,11 @@ models/
 # Generated dashboard output (built by CI from metrics/history.jsonl)
 site/
 
+# Recorded LLM responses. The bodies are large and are re-recordable for money;
+# the index.json manifest beside them IS committed, so what a cassette contains
+# and what it cost stays reviewable without carrying megabytes of transcript.
+cassettes/*/calls.jsonl
+
 # Private working context — kept local, deliberately not published.
 # The brief carries career/CV strategy that does not belong in a public repo's
 # permanent history. Engineering decisions that DO belong live in docs/adr/.

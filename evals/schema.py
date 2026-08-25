@@ -10,11 +10,34 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, Field
 
+if TYPE_CHECKING:
+    from graphs.llm import Usage
+
 HISTORY_PATH = Path("metrics/history.jsonl")
+
+Provenance = Literal["live", "replayed", "mixed"]
+
+
+class NotAMeasurement(RuntimeError):  # noqa: N818
+    """A run served wholly or partly from a cassette tried to record a metric."""
+
+
+def provenance_of(usage: Usage) -> Provenance:
+    """Where a run's model responses came from, derived — never asserted.
+
+    Deliberately computed from `Usage` rather than passed by the caller. A flag a
+    caller sets is a flag a caller can forget, and the failure mode is a replayed
+    number published as a measurement.
+    """
+    if usage.replayed_calls == 0:
+        return "live"
+    if usage.calls == 0:
+        return "replayed"
+    return "mixed"
 
 
 class RunContext(BaseModel):
@@ -38,6 +61,16 @@ class RunContext(BaseModel):
 
     api_cost_usd: float = Field(ge=0.0)
     duration_s: float = Field(ge=0.0)
+
+    # Defaults to "live" because it must: the rows already in the history file
+    # predate the cassette and were every one of them live, and a default that
+    # invalidated them would rewrite history to make room for a new field.
+    #
+    # There is deliberately no `avoided_cost_usd` here. `append_row` refuses any
+    # row that is not live, so the field could never be non-zero in a written
+    # row — it would be decoration implying the cassette had been used to
+    # produce a metric, which is the one thing it must never do.
+    provenance: Provenance = "live"
 
 
 class RetrievalMetrics(BaseModel):
@@ -131,7 +164,23 @@ class MetricsRow(BaseModel):
 
 
 def append_row(row: MetricsRow, path: Path = HISTORY_PATH) -> None:
-    """Append one run to the history log, creating it if absent."""
+    """Append one run to the history log, creating it if absent.
+
+    **A replayed run is not a measurement and cannot be recorded.** This is the
+    mechanism, not a convention: every path that publishes a number goes through
+    this one function, so making a cassette-served run publishable would mean
+    deleting a named exception in a diff someone has to approve.
+
+    Replay reproduces what the model said last time. That is exactly what makes
+    it useful for testing the pipeline and exactly what makes it worthless as
+    evidence about the pipeline's current behaviour.
+    """
+    if row.context.provenance != "live":
+        raise NotAMeasurement(
+            f"refusing to record a '{row.context.provenance}' run: responses came from a "
+            "cassette, so this reproduces an old measurement rather than making a new one. "
+            "Re-run with --cassette off (or --cassette record) to record a metric."
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     line = row.model_dump_json()
     with path.open("a", encoding="utf-8", newline="\n") as fh:
@@ -150,8 +199,13 @@ def load_history(path: Path = HISTORY_PATH) -> list[MetricsRow]:
 
 
 def latest_for_layer(rows: list[MetricsRow], layer: Layer) -> MetricsRow | None:
-    """Most recent run for a layer, or None if that layer has never run."""
+    """Most recent *live* run for a layer, or None if that layer has never run.
+
+    Non-live rows cannot reach the history file through `append_row`, so this
+    filter defends against a hand-edited file rather than against the harness —
+    which is precisely where a fabricated README number would come from.
+    """
     for row in reversed(rows):
-        if row.metrics.layer == layer:
+        if row.metrics.layer == layer and row.context.provenance == "live":
             return row
     return None

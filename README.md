@@ -132,6 +132,25 @@ either metric past tolerance, so these numbers are defended rather than merely r
 set is small and single-annotator, and the corpus excludes case law — all of which bounds what these
 scores can be taken to mean.
 
+### Running the evals for free
+
+A Layer 1b run is ~1100 Claude calls and cost $3.23. Every request/response pair is recorded once to
+a **cassette** and served from disk thereafter, so re-running the harness after a refactor costs
+$0.00 and needs no API key:
+
+```bash
+uv run python -m evals.qa_eval --cassette replay --cassette-name qa-eval
+uv run python -m evals.qa_eval --cassette auto   --cassette-name qa-eval   # buy only the misses
+uv run python -m evals.qa_eval --cassette record --cassette-name qa-eval   # re-record: ~$3.23
+```
+
+**A replayed run is not a measurement, and the code enforces that rather than asking politely.**
+`append_row` raises `NotAMeasurement` for any run whose responses came from a cassette, `--record`
+with `--cassette replay` fails at argument parsing, and the gate ignores non-live rows. Replay
+reproduces what the model said last time — useful for testing the pipeline, worthless as evidence
+about its current behaviour. See [`cassettes/README.md`](cassettes/README.md) and
+[ADR 0010](docs/adr/0010-cassette-replay-for-llm-evals.md).
+
 ---
 
 ## Architecture

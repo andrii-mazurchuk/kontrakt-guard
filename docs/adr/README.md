@@ -18,3 +18,4 @@ nobody reads is worth nothing.
 | [0007](0007-pending-amendments.md) | Ingest the law in force, exclude future-dated amendments | Accepted |
 | [0008](0008-bm25-over-ts-rank-cd.md) | BM25 over a materialised inverted index, not `ts_rank_cd` | Accepted |
 | [0009](0009-query-rewriting-off-by-default.md) | Query rewriting shipped but off — it cost 8 points of recall@5 | Accepted |
+| [0010](0010-cassette-replay-for-llm-evals.md) | Record/replay cassettes for LLM calls; a replayed run cannot be published | Accepted |
