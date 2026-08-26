@@ -1,0 +1,15 @@
+{
+  "cassette_version": 1,
+  "commit": "6eb81f5b36d2cd0887832fc5bfb95b8ae139fd49",
+  "corpus_manifest_sha": "d9d40d14c3d71638c133ad8654e8aa65b101b8217d9d693a1bdf3714e5607eb9",
+  "input_tokens": 0,
+  "key_version": 1,
+  "model_cheap": "claude-haiku-4-5-20251001",
+  "model_strong": "claude-sonnet-5",
+  "n_entries": 0,
+  "name": "qa-eval",
+  "output_tokens": 0,
+  "recorded_at": "2026-08-26T06:18:58+00:00",
+  "recorded_cost_usd": 0.0,
+  "retrieval_config_hash": "d6e9681308d7"
+}
