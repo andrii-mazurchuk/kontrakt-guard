@@ -332,7 +332,24 @@ class Cassette:
                 )
             self.hits += 1
             self._served[key] = self._served.get(key, 0) + 1
-            return pool[0].model_copy(deep=True)
+            replayed = pool[0].model_copy(deep=True)
+
+        # `model_name` is restored from the request, because it is not in the
+        # response at all. LangChain adds it to `response_metadata` *after*
+        # `_generate` returns, from the `ChatResult.llm_output` the real client
+        # builds; a replayed result carries no `llm_output`, so the enrichment
+        # never runs and the field arrives empty.
+        #
+        # Found by the first live recording, and it was not cosmetic: `Usage`
+        # keys `per_model` on this field and prices an unknown model at the most
+        # expensive rate, so 970 Haiku calls were billed as Sonnet and the
+        # reported "avoided cost" came out at $6.68 against a real $3.23. The
+        # request is the authoritative record of which model was asked.
+        if not replayed.response_metadata.get("model_name"):
+            model = payload.get("model")
+            if isinstance(model, str) and model:
+                replayed.response_metadata["model_name"] = model
+        return replayed
 
     def put(self, payload: dict[str, Any], message: AIMessage) -> None:
         """Append a response, unless an identical one is already pooled.

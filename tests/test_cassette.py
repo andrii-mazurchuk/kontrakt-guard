@@ -29,7 +29,7 @@ from graphs.cassette import (
     reset_cassette_cache,
     serialise_ai_message,
 )
-from graphs.llm import Usage, cheap_model
+from graphs.llm import PRICES, Usage, cheap_model
 from graphs.qa_flow import Grade, structured_call
 from kontrakt_guard.config import Settings
 
@@ -415,3 +415,40 @@ def test_multiple_responses_for_one_key_are_pooled_and_reported(tmp_path):
 def test_an_unknown_mode_is_rejected():
     with pytest.raises(ValueError, match="unknown cassette mode"):
         cassette_module.get_cassette("rewind", "cassettes", "t")
+
+
+def test_replay_restores_the_model_name_from_the_request(tmp_path):
+    """Found by the first live recording, and it was not cosmetic.
+
+    `model_name` is absent from the response entirely: langchain adds it to
+    `response_metadata` after `_generate` returns, from the `llm_output` the
+    real client builds. A replayed result carries no `llm_output`, so the
+    enrichment never runs.
+
+    `Usage` keys `per_model` on that field and prices an unknown model at the
+    most expensive known rate, so 970 Haiku calls were billed as Sonnet and the
+    reported avoided cost came out at $6.68 against a real $3.23.
+    """
+    cassette = Cassette("record", tmp_path / "cassettes", "m")
+    payload = request_payload(
+        "claude-haiku-4-5-20251001", 0.0, 1024, None, [HumanMessage(content="pytanie")], {}
+    )
+    # As Anthropic actually returns it: a provider, and no model name.
+    recorded = AIMessage(
+        content="ok",
+        response_metadata={"model_provider": "anthropic"},
+        usage_metadata={"input_tokens": 10, "output_tokens": 2, "total_tokens": 12},
+    )
+    cassette.put(payload, recorded)
+    cassette.close()
+
+    replayed = Cassette("replay", tmp_path / "cassettes", "m").get(payload)
+    assert replayed is not None
+    assert replayed.response_metadata["model_name"] == "claude-haiku-4-5-20251001"
+
+    usage = Usage()
+    usage.record(replayed, str(replayed.response_metadata.get("model_name") or ""))
+    assert usage.per_model == {"claude-haiku-4-5-20251001": 1}
+    # Priced as Haiku, not at the unknown-model fallback rate.
+    rate_in, rate_out = PRICES["claude-haiku-4-5-20251001"]
+    assert usage.avoided_cost_usd == pytest.approx((10 * rate_in + 2 * rate_out) / 1_000_000)
