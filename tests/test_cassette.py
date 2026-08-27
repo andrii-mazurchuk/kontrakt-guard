@@ -452,3 +452,30 @@ def test_replay_restores_the_model_name_from_the_request(tmp_path):
     # Priced as Haiku, not at the unknown-model fallback rate.
     rate_in, rate_out = PRICES["claude-haiku-4-5-20251001"]
     assert usage.avoided_cost_usd == pytest.approx((10 * rate_in + 2 * rate_out) / 1_000_000)
+
+
+def test_a_cassette_that_recorded_nothing_writes_no_index(tmp_path):
+    """`index.json` is committed while the body is not.
+
+    An index describing zero entries would sit in a public repository looking
+    like a measurement artifact and being none — which is what happened when a
+    recording run died on its first call for want of API credit.
+    """
+    tape = Cassette("record", tmp_path / "cassettes", "empty")
+    tape.close()
+    assert not (tmp_path / "cassettes" / "empty" / "index.json").exists()
+
+
+def test_a_cassette_that_recorded_something_writes_an_index(tmp_path):
+    tape = Cassette("record", tmp_path / "cassettes", "full")
+    tape.put(
+        request_payload(CHEAP, 0.0, 1024, None, [HumanMessage(content="q")], {}),
+        AIMessage(
+            content="a",
+            response_metadata={"model_name": CHEAP},
+            usage_metadata={"input_tokens": 5, "output_tokens": 1, "total_tokens": 6},
+        ),
+    )
+    tape.close()
+    index = json.loads((tmp_path / "cassettes" / "full" / "index.json").read_text(encoding="utf-8"))
+    assert index["n_entries"] == 1

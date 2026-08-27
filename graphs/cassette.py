@@ -445,6 +445,14 @@ class Cassette:
             self._write_index()
 
     def _write_index(self) -> None:
+        # A cassette that recorded nothing gets no index. `index.json` is
+        # committed while the body is not, so an index describing zero entries
+        # would sit in a public repository looking like a measurement artifact
+        # and being none — which is exactly what happened when a recording run
+        # died on its first call for want of API credit.
+        if not self._pools:
+            return
+
         input_tokens = 0
         output_tokens = 0
         per_model: dict[str, tuple[int, int]] = {}
