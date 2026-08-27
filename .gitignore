@@ -47,3 +47,4 @@ job_market_report_*.md
 Thumbs.db
 .idea/
 .vscode/
+cassettes/qa-eval-v2/
