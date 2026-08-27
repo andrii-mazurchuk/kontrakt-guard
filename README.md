@@ -1,30 +1,59 @@
 # Kontrakt-Guard
 
-Polish employment-contract auditor. Upload an `umowa o pracę`, `umowa zlecenie` or B2B contract;
-the system segments it into clauses, retrieves the governing law per clause from a corpus of
-consolidated Polish acts, and returns a structured verdict — `compliant` / `risky` / `illegal` —
-with an explanation and exact article citations.
+**Grounded legal Q&A over Polish employment law.** Ask a question in Polish; the system retrieves the
+governing articles from a corpus of consolidated Polish acts, grades each one for relevance, and
+answers using only what survived — with exact article citations, or an explicit refusal when the
+corpus cannot ground the question.
 
-A grounded legal Q&A endpoint falls out of the same engine: ask an employment-law question, get a
-citation-backed answer or an explicit refusal when the corpus cannot ground it.
+The engine is built to be called in a loop over the clauses of an employment contract, which is the
+project's eventual goal. **That auditor is not built** — see [Scope](#scope) for exactly what exists
+and what does not.
 
-> **This is not legal advice.** Verdicts are produced by a language model over a static snapshot of
+> **This is not legal advice.** Answers are produced by a language model over a static snapshot of
 > Polish legislation and may be wrong, incomplete, or out of date. Consult a qualified lawyer or the
 > Państwowa Inspekcja Pracy before acting on anything here.
 
 ---
 
-## Status
+## Scope
 
-🚧 In development. This section is replaced by a quickstart once `docker compose up` serves the API.
+Stated up front, because a README that describes an intention as though it were a feature is the
+first thing that makes the rest of it untrustworthy.
+
+**Built and measured**
+
+- Article-aware ingestion of consolidated Polish statute PDFs — 481 articles, superscripted
+  amendment numbering recovered from glyph geometry, structural validation that fails the build.
+- Postgres + pgvector with a **Polish full-text configuration built from Hunspell**, because stock
+  Postgres ships none and Snowball has no Polish stemmer.
+- Hybrid retrieval: BM25 over a materialised inverted index, plus dense e5 embeddings, weighted
+  fusion. Every parameter chosen by measurement.
+- A LangGraph Q&A flow with a conditional refusal edge, and citation grounding enforced in code.
+- `POST /ask`, and two evaluation layers with CI regression gates.
+- A record/replay cassette harness, so iterating on any of the above costs nothing.
+
+**Not built**
+
+- The contract auditor: clause segmentation, the per-clause verdict loop, `POST /audit`.
+- Layer 2 — the synthetic labeled contract set, the violation catalogue, and violation-detection F1.
+
+The auditor is deliberately absent rather than half-present. This repository's claim is that its
+numbers can be trusted; shipping an unmeasured component into it would cost more than the component
+is worth.
 
 ---
 
 ## Metrics
 
-Both tables are **generated from `metrics/history.jsonl` by CI** — no number here is typed by hand.
+Every table is **generated from `metrics/history.jsonl` by CI** — no number here is typed by hand.
 Every row is attributable to an exact configuration (embedding model + revision, model IDs,
 retrieval config hash) recorded alongside it.
+
+> **`main` currently contains changes made *after* the last recorded run.** The grading prompt, the
+> article-level retrieval pool and `MAX_PASSAGES` all changed in
+> [#24](https://github.com/andrii-mazurchuk/kontrakt-guard/pull/24) and have not been re-measured.
+> The commit hash under each table is the one the number was produced at, and it is not HEAD.
+> These figures describe the system as it stood at that commit — nothing more.
 
 ### Layer 1 — retrieval quality
 
@@ -117,16 +146,33 @@ loses most of its ground truth.
 
 ### Layer 2 — audit quality
 
-Precision / recall / F1 on violation detection, over a synthetic labeled contract set built by
-planting known violations into legitimate contract templates.
+**Not built.** Precision / recall / F1 on violation detection over a synthetic labeled contract set
+is what this layer will hold once the auditor exists. The table is generated from the same log as
+the others and stays empty until a real run fills it.
 
 <!-- METRICS:LAYER2:START -->
 _No eval runs recorded yet._
 <!-- METRICS:LAYER2:END -->
 
-The two layers are evaluated independently on purpose: when a number moves, it is attributable to
-retrieval or to judgement, not to an undifferentiated blob. CI fails a pull request that regresses
-either metric past tolerance, so these numbers are defended rather than merely reported.
+The layers are evaluated independently on purpose: when a number moves, it is attributable to
+retrieval, to judgement, or to generation — not to an undifferentiated blob. CI fails a pull request
+that regresses a metric past tolerance, so these numbers are defended rather than merely reported.
+
+### What the measurements actually changed
+
+Three times the evidence contradicted the design, and each is recorded as an ADR rather than quietly
+corrected:
+
+- **Reciprocal Rank Fusion made hybrid retrieval worse than dense alone** — 75.5% against 80.2%
+  recall@5. Equal weighting promoted the weaker leg's noise into the top ranks.
+  ([ADR 0003](docs/adr/0003-hybrid-retrieval-without-reranker.md))
+- **Fixing that weaker leg properly bought almost nothing end to end.** Postgres ranking has no IDF
+  term; replacing it with BM25 took the lexical leg from 46.9% to 69.6% recall@5 — and moved the
+  merged system by half a point. ([ADR 0008](docs/adr/0008-bm25-over-ts-rank-cd.md))
+- **Query rewriting, step one of the original design, cost 8 points of recall@5** and lowered
+  candidate-pool coverage: the rewrites were *shorter* than the questions, discarding search terms
+  rather than translating register. It ships disabled.
+  ([ADR 0009](docs/adr/0009-query-rewriting-off-by-default.md))
 
 **Read [`LIMITATIONS.md`](LIMITATIONS.md) alongside them.** The audit dataset is synthetic, the gold
 set is small and single-annotator, and the corpus excludes case law — all of which bounds what these
@@ -155,17 +201,27 @@ about its current behaviour. See [`cassettes/README.md`](cassettes/README.md) an
 
 ## Architecture
 
-_Diagram lands here once the graphs are built._
+One engine: *given a legal question, return the exact articles that answer it and an answer grounded
+in them.* The auditor, when it exists, is that engine called in a loop over contract clauses.
 
-One engine underlies both products: *given a legal question, return the exact articles that answer
-it and an answer grounded in them.* The auditor is that engine called in a loop over contract
-clauses.
+```
+understand → retrieve → grade → ┬→ answer → END
+                                └→ refuse → END
+```
 
-- `src/kontrakt_guard/ingestion` — ISAP acquisition, article-aware parsing, embedding, pgvector load
-- `src/kontrakt_guard/retrieval` — hybrid search (BM25 over Postgres full-text + pgvector dense), merge, LLM relevance grading
-- `src/kontrakt_guard/graphs` — LangGraph flows: Q&A and contract audit, both with an explicit refusal path
-- `src/kontrakt_guard/api` — FastAPI: `POST /audit`, `POST /ask`
-- `evals/` — gold set, synthetic contract generator, metric computation
+The conditional edge is the point. When no retrieved article survives relevance grading, the flow
+routes to a refusal rather than handing an empty context to a generative model — a designed route,
+not an error handler.
+
+| Package | Contents |
+|---|---|
+| `ingestion/` | ISAP acquisition, article-aware PDF parsing, chunking, embedding, pgvector load |
+| `retrieval/` | Hybrid search — BM25 over a materialised inverted index + pgvector dense — and fusion |
+| `graphs/` | The LangGraph Q&A flow, prompts, Claude clients with cost accounting, cassette harness |
+| `evals/` | Gold set, both eval layers, regression gate, README generator, cost estimator |
+| `src/kontrakt_guard/` | `config.py` and the FastAPI app (`/health`, `/`, `POST /ask`) |
+
+`graphs/audit_flow.py`, `evals/contract_generator.py` and `POST /audit` do not exist yet.
 
 ---
 

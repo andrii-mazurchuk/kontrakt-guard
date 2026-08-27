@@ -76,7 +76,11 @@ A study guide with interview-shaped questions is owed at the end of the build, m
 
 Workflow foundation is complete and verified: CI green, `main` protected with admin enforcement on, squash-merge only. `CONTRIBUTING.md` documents the branch strategy and the protection escape hatch; `docs/adr/` records the load-bearing decisions; `LIMITATIONS.md` was written before any numbers exist so the caveats stay honest.
 
-Not yet built — this is the actual project, and its design is Andrey's call, not something to assume: ingestion, retrieval, the LangGraph flows, the gold set, and the contract generator. The API carries only `/health` and `/`.
+**Built and measured:** ingestion (481 articles), hybrid retrieval, the 97-question gold set, the LangGraph Q&A flow with its refusal edge, `POST /ask`, Layer 1 (recall@5 85.3%), Layer 1b (citation F1 0.641, 0% hallucinated citations), and a record/replay cassette harness that makes eval iteration free.
+
+**Not built:** `graphs/audit_flow.py`, `evals/contract_generator.py`, the violation catalogue, Layer 2, and `POST /audit`. The auditor is deliberately absent rather than half-present — unmeasured code in a repository whose thesis is measurement costs more than it is worth. The violation catalogue is one of the four things to stop and ask about.
+
+**`main` holds unmeasured changes.** The grading prompt, article-level pooling and `MAX_PASSAGES` changed in #24 and have not been re-measured; the README says so. Re-measuring the affected questions costs ~$0.21, not a full $3.23 run — size the run to the question being asked.
 
 **Installed LangGraph is 1.2.11 and langchain-core 1.5.6 — the v1 APIs.** Nearly every tutorial and blog post online targets 0.x and its idioms differ. Check the installed version's actual API rather than pattern-matching from memory or from search results.
 
