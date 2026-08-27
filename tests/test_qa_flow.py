@@ -8,6 +8,7 @@ faithfulness judge's job, and neither belongs in a unit test.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -391,3 +392,31 @@ def test_the_rewrite_still_runs_when_switched_on():
 
     assert result["search_query"] == "praca w godzinach nadliczbowych"
     assert len(cheap.calls) == 1
+
+
+def test_retrieval_fills_the_pool_with_distinct_articles(monkeypatch):
+    """`retrieval_top_k` must buy ten articles, not ten chunks.
+
+    Measured on the gold set: in 21 of 97 questions the ten top-ranked chunks
+    collapsed to fewer than ten articles — as few as seven — because a long
+    article contributes several chunks. Layer 1 reports recall@10 over articles,
+    so the flow's real pool was smaller than the published number, and thirteen
+    ground-truth articles never reached the grader.
+    """
+    import graphs.qa_flow as mod
+
+    # Three chunks of Art. 25 at the head: before the fix these consumed three
+    # of the four slots and the pool held two articles instead of four.
+    lexical = [hit("25"), hit("25"), hit("25"), hit("26"), hit("27")]
+    monkeypatch.setattr(mod, "lexical_search", lambda *a, **k: lexical)
+    monkeypatch.setattr(mod, "dense_search", lambda *a, **k: [hit("28"), hit("29")])
+
+    flow = make_flow()
+    flow.settings = Settings(retrieval_top_k=4)
+    flow.embedder = SimpleNamespace(encode_query=lambda text: [0.0])  # type: ignore[assignment]
+
+    articles = [h.article for h in flow.retrieve(QAState(question="q"))["hits"]]
+
+    assert len(articles) == 4
+    assert len(set(articles)) == 4, "the pool must hold four distinct articles"
+    assert set(articles) <= {"25", "26", "27", "28", "29"}

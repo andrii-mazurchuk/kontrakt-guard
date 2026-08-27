@@ -56,7 +56,14 @@ from retrieval.search import Hit, dense_search, lexical_search, merge
 
 # How many graded chunks reach the answer node. Grading already removed the
 # irrelevant ones, so this is a context-size bound rather than a quality filter.
-MAX_PASSAGES = 6
+#
+# Now equal to `retrieval_top_k`, which makes it inert: nothing that survives
+# grading is dropped. At 6 it silently discarded survivors past the sixth in 4
+# of 97 gold questions — a filter by rank position, applied after both retrieval
+# and grading had judged the chunk worth keeping, and logged nowhere. Measured
+# cost of that: exactly one ground-truth article out of 115, which is far less
+# than it looked like it should be, but there is no argument for paying it.
+MAX_PASSAGES = 10
 
 # Grading is one independent call per chunk, so the wall-clock cost is one call
 # deep rather than `retrieval_top_k` calls deep.
@@ -220,13 +227,38 @@ class QAFlow:
             self.embedder.encode_query(query_input(query)),
             settings.vector_candidates,
         )
-        hits = merge(
+        # Merge over the whole candidate pool, then take the best chunk of each
+        # distinct article until `retrieval_top_k` articles are held.
+        #
+        # `retrieval_top_k` counts CHUNKS everywhere else, and taking ten chunks
+        # here was quietly costing coverage: in 21 of 97 gold questions the ten
+        # top-ranked chunks collapsed to fewer than ten articles, as few as
+        # seven, because a long article contributes several chunks. Layer 1
+        # reports recall@10 over articles, so the flow's real pool was smaller
+        # than the number the README publishes — 88.7% of ground-truth articles
+        # reached grading against a reported 93.0%. Thirteen articles were lost
+        # before the grader ever saw them.
+        #
+        # De-duplicating costs nothing: the same ten grading calls now cover ten
+        # articles instead of eight.
+        merged = merge(
             lexical,
             dense,
-            k=settings.retrieval_top_k,
+            k=len(lexical) + len(dense),
             fusion=settings.fusion,
             alpha=settings.hybrid_alpha,
         )
+
+        hits: list[Hit] = []
+        seen: set[tuple[str, str]] = set()
+        for hit in merged:
+            article = (hit.act, hit.article)
+            if article in seen:
+                continue
+            seen.add(article)
+            hits.append(hit)
+            if len(hits) >= settings.retrieval_top_k:
+                break
         return {"hits": hits}
 
     # -- grade -----------------------------------------------------------------
