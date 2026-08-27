@@ -1,7 +1,7 @@
 [project]
 name = "kontrakt-guard"
 version = "0.1.0"
-description = "Polish employment contract auditor — LangGraph + hybrid RAG over pgvector, with citation-backed verdicts."
+description = "Grounded legal Q&A over Polish employment law — LangGraph + hybrid RAG over pgvector, with citation-backed answers and a measured refusal path."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 license = { text = "MIT" }
