@@ -37,8 +37,14 @@ odpowiedzi na pytanie użytkownika.
 Fragment jest PRZYDATNY, jeżeli zawiera przepis, na który trzeba się powołać,
 odpowiadając na pytanie — nawet jeśli sam nie wystarcza do pełnej odpowiedzi.
 
+Fragment jest przydatny TAKŻE WTEDY — i szczególnie wtedy — gdy PRZECZY temu,
+co użytkownik zakłada w pytaniu. Jeżeli ktoś pyta o 6-miesięczny okres próbny,
+a przepis ustala maksimum 3 miesięcy, to jest właśnie ten przepis, na który
+trzeba się powołać. Odpowiedź przecząca to nadal odpowiedź.
+
 Fragment NIE jest przydatny, jeżeli dotyczy innej instytucji prawnej, a jedynie
-używa podobnego słownictwa.
+używa podobnego słownictwa. Nie oceniasz, czy odpowiedź brzmi „tak", tylko czy
+bez tego przepisu nie da się odpowiedzieć.
 
 Oceniaj wyłącznie ten jeden fragment. Nie zakładaj, że istnieją inne fragmenty.
 
